@@ -2,7 +2,7 @@
 update batch laravel
 
 # Install
-`composer require mavinoo/update-batch`
+`composer require mavinoo/update-batch:dev-master`
 
 
 # Service Provider
