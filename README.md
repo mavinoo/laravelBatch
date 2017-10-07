@@ -17,7 +17,7 @@ file app.php in array aliases :
 `'UpdateBatch' => Mavinoo\UpdateBatch\UpdateBatchFacade::class,`
 
 
-#Example
+# Example
 
 ```
 $table = 'users';
