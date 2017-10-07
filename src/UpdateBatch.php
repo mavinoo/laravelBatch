@@ -37,7 +37,7 @@ class UpdateBatch
         $final  = array();
         $ids    = array();
 
-        if(count($values))
+        if(!count($values))
             return false;
         if(!isset($index) AND empty($index))
             return 'Select Key for Update';
