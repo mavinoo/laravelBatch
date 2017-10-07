@@ -1,0 +1,19 @@
+{
+    "name": "mavinoo/UpdateBatch",
+    "description": "Generates an update string based on the data you supply, and runs the query.",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Mohammad Ghanbari",
+            "email": "wordpress.iran@gmail.com"
+        }
+    ],
+    "require": {},
+    "autoload": {
+        "psr-4": {
+            "Mavinoo\\UpdateBatch\\": "src/"
+        }
+    },
+    "minimum-stability": "dev"
+}
