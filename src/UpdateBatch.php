@@ -10,7 +10,7 @@ class UpdateBatch
      * Update Multi fields
      * $table String
      * $value Array
-     * $index key
+     * $index String
      *
      * Example
      *
