@@ -1,5 +1,5 @@
 {
-    "name": "mavinoo/UpdateBatch",
+    "name": "mavinoo/update-batch",
     "description": "Generates an update string based on the data you supply, and runs the query.",
     "type": "library",
     "license": "MIT",
