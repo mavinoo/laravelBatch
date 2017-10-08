@@ -1,5 +1,5 @@
-# UPDATE BATCH IN LARAVEL
-update batch laravel
+# UPDATE BATCH (BULK) IN LARAVEL
+update batch (bulk) laravel
 
 # Install
 `composer require mavinoo/update-batch:dev-master`
