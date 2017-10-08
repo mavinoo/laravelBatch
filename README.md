@@ -17,7 +17,7 @@ file app.php in array aliases :
 `'UpdateBatch' => Mavinoo\UpdateBatch\UpdateBatchFacade::class,`
 
 
-# Example
+# Example 1
 
 ```
 $table = 'users';
@@ -37,6 +37,38 @@ $value = [
 
 $index = 'id';
 
+
+UpdateBatch::updateBatch($table, $value, $index);
+```
+
+
+# Example 2
+
+```
+$table = 'users';
+
+$value = [
+     [
+         'id' => 1,
+         'status' => 'active'
+     ],
+     [
+         'id' => 5,
+         'status' => 'deactive',
+         'nickname' => 'Ghanbari'
+     ],
+     [
+         'id' => 10,
+         'status' => 'active',
+         'date' => Carbon::now()
+     ],
+     [
+         'id' => 11,
+         'username' => 'mavinoo'
+     ]
+];
+
+$index = 'id';
 
 UpdateBatch::updateBatch($table, $value, $index);
 ```
