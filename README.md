@@ -1,6 +1,9 @@
 # UPDATE BATCH (BULK) IN LARAVEL
 update batch (bulk) laravel
 
+[Click to install the latest version](https://github.com/mavinoo/laravelBatch).
+
+
 # Install
 `composer require mavinoo/update-batch:1.0`
 
