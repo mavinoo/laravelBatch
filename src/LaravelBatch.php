@@ -169,7 +169,7 @@ class Batch
                     $totalQuery += DB::statement($value) ? 1 : 0;
 
                 return [
-                    'totalValues'   =>  $totalValues,
+                    'totalRows'     =>  $totalValues,
                     'totalBatch'    =>  $totalChunk,
                     'totalQuery'    =>  $totalQuery
                 ];
