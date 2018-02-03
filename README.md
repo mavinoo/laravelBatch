@@ -124,7 +124,7 @@ $result = Batch::insert($table, $columns, $values, $batchSize);
 sample array result:
 Array
 (
-    [totalValues] => 384
+    [totalRows]  => 384
     [totalBatch] => 500
     [totalQuery] => 1
 )
