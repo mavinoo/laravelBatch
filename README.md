@@ -1,26 +1,25 @@
-# UPDATE BATCH (BULK) IN LARAVEL
-update batch (bulk) laravel
-
-[Click to install the latest version](https://github.com/mavinoo/laravelBatch).
-
+# Laravel BATCH (BULK)
+Insert and update batch (bulk) in laravel
 
 # Install
-`composer require mavinoo/update-batch:1.0`
+`composer require mavinoo/laravel-batch:dev-master`
+
+NOTE: [Click to install the previous version](https://github.com/mavinoo/laravelBatch/tree/v1.0).
 
 
 # Service Provider
 file app.php in array providers :
 
-`Mavinoo\UpdateBatch\UpdateBatchServiceProvider::class,`
+`Mavinoo\LaravelBatch\LaravelBatchServiceProvider::class,`
 
 
 # Aliases
 file app.php in array aliases :
 
-`'UpdateBatch' => Mavinoo\UpdateBatch\UpdateBatchFacade::class,`
+`'Batch' => Mavinoo\LaravelBatch\LaravelBatchFacade::class,`
 
 
-# Example 1
+# Example Update 1
 
 ```
 $table = 'users';
@@ -41,11 +40,11 @@ $value = [
 $index = 'id';
 
 
-UpdateBatch::updateBatch($table, $value, $index);
+Batch::update($table, $value, $index);
 ```
 
 
-# Example 2
+# Example Update 2
 
 ```
 $table = 'users';
@@ -73,5 +72,48 @@ $value = [
 
 $index = 'id';
 
-UpdateBatch::updateBatch($table, $value, $index);
+Batch::update($table, $value, $index);
+```
+
+
+# Example Insert
+
+```
+$table = 'users';
+
+$columns = [
+     'firstName',
+     'lastName',
+     'email',
+     'isActive',
+     'status',
+];
+
+$values = [
+     [
+         'Mohammad',
+         'Ghanbari',
+         'emailSample_1@gmail.com',
+         '1',
+         '0',
+     ] ,
+     [
+         'Saeed',
+         'Mohammadi',
+         'emailSample_2@gmail.com',
+         '1',
+         '0',
+     ] ,
+     [
+         'Avin',
+         'Ghanbari',
+         'emailSample_3@gmail.com',
+         '1',
+         '0',
+     ] ,
+];
+
+$maxValues = 500; // insert 500 (default), 100 minimum rows in one query
+
+Batch::insert($table, $columns, $values, $maxValues);
 ```
