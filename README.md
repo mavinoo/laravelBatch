@@ -2,9 +2,9 @@
 Insert and update batch (bulk) in laravel
 
 # Install
-`composer require mavinoo/laravel-batch:dev-master`
+`composer require mavinoo/laravel-batch:2.0`
 
-NOTE: [Click to install the previous version](https://github.com/mavinoo/laravelBatch/tree/v1.0).
+NOTE: [Click to install the previous version 1.0](https://github.com/mavinoo/laravelBatch/tree/v1.0).
 
 
 # Service Provider
