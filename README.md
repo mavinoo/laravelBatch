@@ -113,7 +113,7 @@ $values = [
      ] ,
 ];
 
-$maxValues = 500; // insert 500 (default), 100 minimum rows in one query
+$batchSize = 500; // insert 500 (default), 100 minimum rows in one query
 
-Batch::insert($table, $columns, $values, $maxValues);
+Batch::insert($table, $columns, $values, $batchSize);
 ```
