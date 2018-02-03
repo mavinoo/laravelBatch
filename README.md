@@ -115,5 +115,17 @@ $values = [
 
 $batchSize = 500; // insert 500 (default), 100 minimum rows in one query
 
-Batch::insert($table, $columns, $values, $batchSize);
+$result = Batch::insert($table, $columns, $values, $batchSize);
+```
+
+```
+// result : false or array
+
+sample array result:
+Array
+(
+    [totalValues] => 384
+    [totalBatch] => 500
+    [totalQuery] => 1
+)
 ```
