@@ -1,6 +1,6 @@
 {
     "name": "mavinoo/laravel-batch",
-    "description": "",
+    "description": "Insert and update batch (bulk) in laravel",
     "type": "library",
     "license": "MIT",
     "authors": [
