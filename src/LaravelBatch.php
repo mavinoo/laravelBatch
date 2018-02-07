@@ -49,7 +49,8 @@ class Batch
             {
                 if ($field !== $index)
                 {
-                    $final[$field][] = 'WHEN `'. $index .'` = "' . $val[$index] . '" THEN "' . $val[$field] . '" ';
+                    $value              = (is_null($val[$field]) ? 'NULL' : '"' . $val[$field] . '"' );
+                    $final[$field][]    = 'WHEN `'. $index .'` = "' . $val[$index] . '" THEN ' . $value . ' ';
                 }
             }
         }
