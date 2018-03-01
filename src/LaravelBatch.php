@@ -58,8 +58,8 @@ class Batch
         $cases = '';
         foreach ($final as $k => $v)
         {
-            $cases .= $k.' = (CASE '. implode("\n", $v) . "\n"
-                            . 'ELSE '.$k.' END), ';
+            $cases .=  '`'. $k.'` = (CASE '. implode("\n", $v) . "\n"
+                            . 'ELSE `'.$k.'` END), ';
         }
 
         $query = 'UPDATE ' . $table . ' SET '. substr($cases, 0, -2) . ' WHERE ' . $index . ' IN('.implode(',', $ids).')';
