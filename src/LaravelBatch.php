@@ -150,7 +150,10 @@ class Batch
             foreach ($value as $data)
             {
                 foreach ($data as $key => $item)
-                    $data[$key]  = "'" . Helpers::mysql_escape($item) ."'";
+                {
+                    $item = is_null($item) ? 'NULL' : "'" . Helpers::mysql_escape($item) ."'";
+                    $data[$key]  = $item;
+                }
 
                 $valueArray[] =  '(' . implode(',', $data) . ')';
             }
