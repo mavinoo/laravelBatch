@@ -62,7 +62,7 @@ class Batch
                             . 'ELSE `'.$k.'` END), ';
         }
 
-        $query = "UPDATE `$table` " . substr($cases, 0, -2) . " WHERE `$index` IN(" . implode(',', $ids) . ");";
+        $query = "UPDATE `$table` SET " . substr($cases, 0, -2) . " WHERE `$index` IN(" . implode(',', $ids) . ");";
 
         return DB::statement($query);
     }
