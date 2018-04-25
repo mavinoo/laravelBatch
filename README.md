@@ -1,3 +1,9 @@
+# donate
+Bitcoin address : `1Lj5e1fmGTqGWSbvSHZ5kBPvwaHEebuPgJ`
+
+Litecoin address : `LcMjDN72CvzBAyAZn7rYSkWTLsksfmeq4q`
+
+
 # Laravel BATCH (BULK)
 Insert and update batch (bulk) in laravel
 
