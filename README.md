@@ -1,4 +1,4 @@
-# donate
+# Donate
 Bitcoin address : `1Lj5e1fmGTqGWSbvSHZ5kBPvwaHEebuPgJ`
 
 Litecoin address : `LcMjDN72CvzBAyAZn7rYSkWTLsksfmeq4q`
