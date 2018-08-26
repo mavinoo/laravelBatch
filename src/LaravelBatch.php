@@ -51,7 +51,6 @@ class Batch
                 {
                     $value           = (is_null($val[$field]) ? 'NULL' : '"' . Helpers::mysql_escape($val[$field]) . '"');
                     $final[$field][] = 'WHEN `'. $index .'` = "' . $val[$index] . '" THEN ' . $value . ' ';
-
                 }
             }
         }
