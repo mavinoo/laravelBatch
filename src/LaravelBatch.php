@@ -8,10 +8,10 @@ use Mavinoo\LaravelBatch\Common\Helpers;
 class Batch
 {
     /**
-     * Update Multi fields
-     * $table String
-     * $value Array
-     * $index String
+     * Update multiple rows
+     * @param string $table Table
+     * @param array $values Values
+     * @param string $index Index
      *
      * Example
      *
@@ -31,6 +31,7 @@ class Batch
      *
      * $index = 'id';
      *
+     * @return mixed
      */
     public function update($table, $values, $index)
     {
@@ -62,7 +63,7 @@ class Batch
                             . 'ELSE `'.$k.'` END), ';
         }
 
-        $query = "UPDATE `$table` SET " . substr($cases, 0, -2) . " WHERE `$index` IN(" . implode(',', $ids) . ");";
+        $query = "UPDATE `$table` SET " . substr($cases, 0, -2) . " WHERE `$index` IN(" . '"' . implode('","', $ids) . '"' . ");";
 
         return DB::statement($query);
     }
