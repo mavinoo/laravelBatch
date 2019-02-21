@@ -6,12 +6,10 @@ Insert and update batch (bulk) in laravel
 
 NOTE: [Click to install the previous version 1.0](https://github.com/mavinoo/laravelBatch/tree/v1.0).
 
-
 # Service Provider
 file app.php in array providers :
 
 `Mavinoo\LaravelBatch\LaravelBatchServiceProvider::class,`
-
 
 # Aliases
 file app.php in array aliases :
@@ -22,8 +20,9 @@ file app.php in array aliases :
 # Example Update 1
 
 ```
-$table = 'users';
+use App\Models\User;
 
+$userInstance = new User;
 $value = [
      [
          'id' => 1,
@@ -36,19 +35,17 @@ $value = [
          'nickname' => 'Ghanbari'
      ] ,
 ];
-
 $index = 'id';
 
-
-Batch::update($table, $value, $index);
+Batch::update($userInstance, $value, $index);
 ```
-
 
 # Example Update 2
 
 ```
-$table = 'users';
+use App\Models\User;
 
+$userInstance = new User;
 $value = [
      [
          'id' => 1,
@@ -69,18 +66,17 @@ $value = [
          'username' => 'mavinoo'
      ]
 ];
-
 $index = 'id';
 
-Batch::update($table, $value, $index);
+Batch::update($userInstance, $value, $index);
 ```
-
 
 # Example Insert
 
 ```
-$table = 'users';
+use App\Models\User;
 
+$userInstance = new User;
 $columns = [
      'firstName',
      'lastName',
@@ -88,7 +84,6 @@ $columns = [
      'isActive',
      'status',
 ];
-
 $values = [
      [
          'Mohammad',
@@ -112,10 +107,9 @@ $values = [
          '0',
      ] ,
 ];
-
 $batchSize = 500; // insert 500 (default), 100 minimum rows in one query
 
-$result = Batch::insert($table, $columns, $values, $batchSize);
+$result = Batch::insert($userInstance, $columns, $values, $batchSize);
 ```
 
 ```
