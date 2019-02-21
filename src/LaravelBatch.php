@@ -47,13 +47,15 @@ class Batch
      */
     public function update(Model $table, array $values, string $index)
     {
-        $final = array();
-        $ids = array();
+        $final = [];
+        $ids = [];
 
-        if (!count($values))
+        if (!count($values)) {
             return false;
-        if (!isset($index) AND empty($index))
+        }
+        if (!isset($index) && empty($index)) {
             return false;
+        }
 
         foreach ($values as $key => $val) {
             $ids[] = $val[$index];
@@ -75,13 +77,6 @@ class Batch
 
         return $this->db->connection($this->getConnectionName($table))->update($query);
     }
-
-    /**
-     *
-
-
-     *
-     */
 
     /**
      * Insert Multi rows
