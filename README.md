@@ -21,7 +21,7 @@ file app.php in array aliases :
 
 # Example Update 1
 
-```
+```php
 use App\Models\User;
 
 $userInstance = new User;
@@ -44,7 +44,7 @@ Batch::update($userInstance, $value, $index);
 
 # Example Update 2
 
-```
+```php
 use App\Models\User;
 
 $userInstance = new User;
@@ -75,7 +75,7 @@ Batch::update($userInstance, $value, $index);
 
 # Example Insert
 
-```
+```php
 use App\Models\User;
 
 $userInstance = new User;
@@ -114,7 +114,7 @@ $batchSize = 500; // insert 500 (default), 100 minimum rows in one query
 $result = Batch::insert($userInstance, $columns, $values, $batchSize);
 ```
 
-```
+```php
 // result : false or array
 
 sample array result:
