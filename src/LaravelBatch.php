@@ -158,7 +158,7 @@ class Batch
 
             $valueString = implode(', ', $valueArray);
 
-            $query [] = "INSERT INTO `$table` (" . implode(',', $columns) . ") VALUES $valueString;";
+            $query [] = "INSERT INTO `" . $this->getFullTableName($table) . "` (" . implode(',', $columns) . ") VALUES $valueString;";
 
         }
 
