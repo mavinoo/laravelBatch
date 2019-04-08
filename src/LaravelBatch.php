@@ -44,7 +44,7 @@ class Batch
      *
      * @return bool|int
      */
-    public function update(Model $table, array $values, string $index)
+    public function update(Model $table, array $values, string $index = null)
     {
         $final = [];
         $ids = [];
@@ -52,8 +52,9 @@ class Batch
         if (!count($values)) {
             return false;
         }
-        if (!isset($index) && empty($index)) {
-            return false;
+        
+        if (!isset($index) || empty($index)) {
+            $index = $table->getKeyName();
         }
 
         foreach ($values as $key => $val) {
