@@ -15,5 +15,15 @@
             "Mavinoo\\LaravelBatch\\": "src/"
         }
     },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Mavinoo\\LaravelBatch\\LaravelBatchServiceProvider"
+            ],
+            "aliases": {
+                "Batch": "Mavinoo\\LaravelBatch\\LaravelBatchFacade"
+            }
+        }
+    },
     "minimum-stability": "dev"
 }
