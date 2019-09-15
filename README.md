@@ -7,7 +7,7 @@ Insert and update batch (bulk) in laravel
 [![Daily Downloads](https://poser.pugx.org/mavinoo/laravel-batch/d/daily)](https://packagist.org/packages/mavinoo/laravel-batch)
 
 # Install
-`composer require mavinoo/laravel-batch:dev-master`
+`composer require mavinoo/laravel-batch`
 
 NOTE: [Click to install the previous version 1.0](https://github.com/mavinoo/laravelBatch/tree/v1.0).
 
