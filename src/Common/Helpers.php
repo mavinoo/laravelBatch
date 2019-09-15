@@ -1,21 +1,9 @@
 <?php
 
-namespace Mavinoo\LaravelBatch\Common;
-
-class Helpers
+if (! function_exists('batch'))
 {
-    public static function mysql_escape($inp)
+    function batch()
     {
-        if(is_array($inp)) return array_map(__METHOD__, $inp);
-
-        if(!empty($inp) && is_string($inp))
-        {
-            return str_replace(
-                ['\\', "\0", "\n", "\r", "'", '"', "\x1a"],
-                ['\\\\', '\\0', '\\n', '\\r', "\\'", '\\"', '\\Z'],
-                $inp);
-        }
-
-        return $inp;
+        return app('Mavinoo\LaravelBatch\Batch');
     }
 }

@@ -4,9 +4,9 @@ namespace Mavinoo\LaravelBatch;
 
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Eloquent\Model;
-use Mavinoo\LaravelBatch\Common\Helpers;
+use Mavinoo\LaravelBatch\Common\Common;
 
-class Batch
+class Batch implements InterfaceBatch
 {
     /**
      * @var DatabaseManager
@@ -61,7 +61,7 @@ class Batch
             $ids[] = $val[$index];
             foreach (array_keys($val) as $field) {
                 if ($field !== $index) {
-                    $value = (is_null($val[$field]) ? 'NULL' : '"' . Helpers::mysql_escape($val[$field]) . '"');
+                    $value = (is_null($val[$field]) ? 'NULL' : '"' . Common::mysql_escape($val[$field]) . '"');
                     $final[$field][] = 'WHEN `' . $index . '` = "' . $val[$index] . '" THEN ' . $value . ' ';
                 }
             }
@@ -143,14 +143,14 @@ class Batch
         $values = array_chunk($values, $totalChunk, true);
 
         foreach ($columns as $key => $column) {
-            $columns[$key] = "`" . Helpers::mysql_escape($column) . "`";
+            $columns[$key] = "`" . Common::mysql_escape($column) . "`";
         }
 
         foreach ($values as $value) {
             $valueArray = [];
             foreach ($value as $data) {
                 foreach ($data as $key => $item) {
-                    $item = is_null($item) ? 'NULL' : "'" . Helpers::mysql_escape($item) . "'";
+                    $item = is_null($item) ? 'NULL' : "'" . Common::mysql_escape($item) . "'";
                     $data[$key] = $item;
                 }
 

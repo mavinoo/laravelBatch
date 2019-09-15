@@ -6,6 +6,7 @@ Insert and update batch (bulk) in laravel
 [![Total Downloads](https://poser.pugx.org/mavinoo/laravel-batch/downloads)](https://packagist.org/packages/mavinoo/laravel-batch)
 [![Daily Downloads](https://poser.pugx.org/mavinoo/laravel-batch/d/daily)](https://packagist.org/packages/mavinoo/laravel-batch)
 
+
 # Install
 `composer require mavinoo/laravel-batch`
 
@@ -18,7 +19,6 @@ file app.php in array providers :
 file app.php in array aliases :
 
 `'Batch' => Mavinoo\LaravelBatch\LaravelBatchFacade::class,`
-
 
 # Example Update 1
 
@@ -115,6 +115,7 @@ $batchSize = 500; // insert 500 (default), 100 minimum rows in one query
 $result = Batch::insert($userInstance, $columns, $values, $batchSize);
 ```
 
+
 ```php
 // result : false or array
 
@@ -125,4 +126,19 @@ Array
     [totalBatch] => 500
     [totalQuery] => 1
 )
+```
+
+
+
+# Helper batch()
+
+```php
+// ex: update
+
+$result = batch()->update($userInstance, $value, $index);
+
+
+// ex: insert
+
+$result = batch()->insert($userInstance, $columns, $values, $batchSize);
 ```

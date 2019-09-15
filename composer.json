@@ -13,7 +13,10 @@
     "autoload": {
         "psr-4": {
             "Mavinoo\\LaravelBatch\\": "src/"
-        }
+        },
+        "files": [
+            "src/Common/Helpers.php"
+        ]
     },
     "extra": {
         "laravel": {
