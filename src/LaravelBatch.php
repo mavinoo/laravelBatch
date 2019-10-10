@@ -44,7 +44,7 @@ class Batch implements InterfaceBatch
      *
      * @return bool|int
      */
-    public function update(Model $table, array $values, string $index = null)
+    public function update(Model $table, array $values, string $index = null, bool $raw = false)
     {
         $final = [];
         $ids = [];
@@ -52,7 +52,7 @@ class Batch implements InterfaceBatch
         if (!count($values)) {
             return false;
         }
-        
+
         if (!isset($index) || empty($index)) {
             $index = $table->getKeyName();
         }
@@ -61,7 +61,8 @@ class Batch implements InterfaceBatch
             $ids[] = $val[$index];
             foreach (array_keys($val) as $field) {
                 if ($field !== $index) {
-                    $value = (is_null($val[$field]) ? 'NULL' : '"' . Common::mysql_escape($val[$field]) . '"');
+                    $finalField = $raw ? Common::mysql_escape($val[$field]) : '"' . Common::mysql_escape($val[$field]) . '"';
+                    $value = (is_null($val[$field]) ? 'NULL' : $finalField);
                     $final[$field][] = 'WHEN `' . $index . '` = "' . $val[$index] . '" THEN ' . $value . ' ';
                 }
             }
@@ -159,8 +160,7 @@ class Batch implements InterfaceBatch
 
             $valueString = implode(', ', $valueArray);
 
-            $query [] = "INSERT INTO `" . $this->getFullTableName($table) . "` (" . implode(',', $columns) . ") VALUES $valueString;";
-
+            $query[] = "INSERT INTO `" . $this->getFullTableName($table) . "` (" . implode(',', $columns) . ") VALUES $valueString;";
         }
 
         if (count($query)) {
