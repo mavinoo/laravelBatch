@@ -164,11 +164,11 @@ class Batch implements InterfaceBatch
         }
 
         if (count($query)) {
-            return $this->db->transaction(function () use ($totalValues, $totalChunk, $query) {
+            return $this->db->transaction(function () use ($totalValues, $totalChunk, $query, $table) {
 
                 $totalQuery = 0;
                 foreach ($query as $value) {
-                    $totalQuery += $this->db->statement($value) ? 1 : 0;
+                    $totalQuery += $this->db->connection($this->getConnectionName($table))->statement($value) ? 1 : 0;
                 }
 
                 return [
