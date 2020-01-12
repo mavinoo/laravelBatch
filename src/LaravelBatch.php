@@ -85,6 +85,7 @@ class Batch implements InterfaceBatch
      * @param array $columns
      * @param array $values
      * @param int $batchSize
+     * @param bool $insertIgnore
      * @return bool|mixed
      * @throws \Throwable
      * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
@@ -125,7 +126,7 @@ class Batch implements InterfaceBatch
      * ];
      * $batchSize = 500; // insert 500 (default), 100 minimum rows in one query
      */
-    public function insert(Model $table, array $columns, array $values, int $batchSize = 500)
+    public function insert(Model $table, array $columns, array $values, int $batchSize = 500, bool $insertIgnore = false)
     {
         // no need for the old validation since we now use type hint that supports from php 7.0
         // but I kept this one
@@ -160,7 +161,9 @@ class Batch implements InterfaceBatch
 
             $valueString = implode(', ', $valueArray);
 
-            $query[] = "INSERT INTO `" . $this->getFullTableName($table) . "` (" . implode(',', $columns) . ") VALUES $valueString;";
+            $ignoreStmt =  $insertIgnore ? ' IGNORE ' : '';
+
+            $query[] = "INSERT ".$ignoreStmt." INTO `" . $this->getFullTableName($table) . "` (" . implode(',', $columns) . ") VALUES $valueString;";
         }
 
         if (count($query)) {
