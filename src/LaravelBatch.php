@@ -102,7 +102,7 @@ class Batch implements InterfaceBatch
      *     ] ,
      * ];
      * $index = 'id';
-     * $index = 'user_id';
+     * $index2 = 'user_id';
      *
      * @return bool|int
      */
