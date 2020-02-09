@@ -84,6 +84,9 @@ class Batch implements InterfaceBatch
      * @param Model $table
      * @param array $values
      * @param string $index
+     * @param string|null $index2
+     * @param bool $raw
+     * @return bool|int
      * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
      *
      * @desc
@@ -104,7 +107,6 @@ class Batch implements InterfaceBatch
      * $index = 'id';
      * $index2 = 'user_id';
      *
-     * @return bool|int
      */
     public function updateWithTwoIndex(Model $table, array $values, string $index = null, string $index2 = null, bool $raw = false)
     {
