@@ -142,6 +142,7 @@ class Batch implements InterfaceBatch
 
         return $this->db->connection($this->getConnectionName($table))->update($query);
     }
+
     /**
      * Insert Multi rows
      * @param Model $table
