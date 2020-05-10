@@ -18,7 +18,7 @@ file app.php in array providers :
 # Aliases
 file app.php in array aliases :
 
-`'Batch' => Mavinoo\LaravelBatch\LaravelBatchFacade::class,`
+`'LaravelBatch' => Mavinoo\LaravelBatch\LaravelBatchFacade::class,`
 
 # Example Update 1
 
@@ -40,7 +40,7 @@ $value = [
 ];
 $index = 'id';
 
-Batch::update($userInstance, $value, $index);
+LaravelBatch::update($userInstance, $value, $index);
 ```
 
 # Example Update 2
@@ -71,7 +71,7 @@ $value = [
 ];
 $index = 'id';
 
-Batch::update($userInstance, $value, $index);
+LaravelBatch::update($userInstance, $value, $index);
 ```
 
 # Example Insert
@@ -112,7 +112,7 @@ $values = [
 ];
 $batchSize = 500; // insert 500 (default), 100 minimum rows in one query
 
-$result = Batch::insert($userInstance, $columns, $values, $batchSize);
+$result = LaravelBatch::insert($userInstance, $columns, $values, $batchSize);
 ```
 
 
