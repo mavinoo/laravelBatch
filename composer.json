@@ -24,7 +24,7 @@
                 "Mavinoo\\LaravelBatch\\LaravelBatchServiceProvider"
             ],
             "aliases": {
-                "Batch": "Mavinoo\\LaravelBatch\\LaravelBatchFacade"
+                "LaravelBatch": "Mavinoo\\LaravelBatch\\LaravelBatchFacade"
             }
         }
     },
