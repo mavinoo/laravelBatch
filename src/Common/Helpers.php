@@ -4,6 +4,6 @@ if (! function_exists('batch'))
 {
     function batch()
     {
-        return app('Mavinoo\LaravelBatch\Batch');
+        return app('Mavinoo\LaravelBatch\LaravelBatch');
     }
 }
