@@ -6,7 +6,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Eloquent\Model;
 use Mavinoo\LaravelBatch\Common\Common;
 
-class Batch implements InterfaceBatch
+class LaravelBatch implements InterfaceBatch
 {
     /**
      * @var DatabaseManager
