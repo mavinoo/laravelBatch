@@ -8,6 +8,6 @@ class LaravelBatchFacade extends Facade
 {
     protected static function getFacadeAccessor()
     {
-       return 'Batch';
+       return 'LaravelBatch';
     }
 }
