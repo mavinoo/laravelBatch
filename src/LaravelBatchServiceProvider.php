@@ -13,7 +13,7 @@ class LaravelBatchServiceProvider extends ServiceProvider
     public function register()
     {
         $this->app->bind('LaravelBatch', function ($app){
-            return new Batch($app->make(DatabaseManager::class));
+            return new LaravelBatch($app->make(DatabaseManager::class));
         });
     }
 }
