@@ -21,7 +21,7 @@
     "extra": {
         "laravel": {
             "providers": [
-                "Mavinoo\\Batch\\ServiceProvider"
+                "Mavinoo\\Batch\\BatchServiceProvider"
             ],
             "aliases": {
                 "Batch": "Mavinoo\\Batch\\BatchFacade"
