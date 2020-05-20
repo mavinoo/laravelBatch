@@ -13,12 +13,12 @@ Insert and update batch (bulk) in laravel
 # Service Provider
 file app.php in array providers :
 
-`Mavinoo\LaravelBatch\LaravelBatchServiceProvider::class,`
+`Mavinoo\Batch\BatchServiceProvider::class,`
 
 # Aliases
 file app.php in array aliases :
 
-`'Batch' => Mavinoo\LaravelBatch\LaravelBatchFacade::class,`
+`'Batch' => Mavinoo\Batch\BatchFacade::class,`
 
 # Example Update 1
 

@@ -1,6 +1,6 @@
 <?php
 
-namespace Mavinoo\LaravelBatch\Common;
+namespace Mavinoo\Batch\Common;
 
 class Common
 {

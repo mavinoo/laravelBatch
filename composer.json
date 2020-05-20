@@ -6,13 +6,13 @@
     "authors": [
         {
             "name": "Mohammad Ghanbari",
-            "email": "wordpress.iran@gmail.com"
+            "email": "mavin.developer@gmail.com"
         }
     ],
     "require": {},
     "autoload": {
         "psr-4": {
-            "Mavinoo\\LaravelBatch\\": "src/"
+            "Mavinoo\\Batch\\": "src/"
         },
         "files": [
             "src/Common/Helpers.php"
@@ -21,10 +21,10 @@
     "extra": {
         "laravel": {
             "providers": [
-                "Mavinoo\\LaravelBatch\\LaravelBatchServiceProvider"
+                "Mavinoo\\Batch\\ServiceProvider"
             ],
             "aliases": {
-                "LaravelBatch": "Mavinoo\\LaravelBatch\\LaravelBatchFacade"
+                "Batch": "Mavinoo\\Batch\\BatchFacade"
             }
         }
     },

@@ -1,10 +1,10 @@
 <?php
 
-namespace Mavinoo\LaravelBatch;
+namespace Mavinoo\Batch;
 
 use Illuminate\Database\Eloquent\Model;
 
-interface InterfaceBatch
+interface BatchInterface
 {
     public function update(Model $table, array $values, string $index = null, bool $raw = false);
 
