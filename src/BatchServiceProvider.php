@@ -1,6 +1,6 @@
 <?php
 
-namespace Mavinoo\LaravelBatch;
+namespace Mavinoo\Batch;
 
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Database\DatabaseManager;
