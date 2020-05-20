@@ -1,6 +1,7 @@
 <?php
 require_once ('BootstrapDatabase.php');
 use Carbon\Carbon;
+use Mavinoo\Batch\Batch;
 
 class BatchUpdateTest extends BootstrapDatabase
 {
@@ -35,7 +36,7 @@ class BatchUpdateTest extends BootstrapDatabase
         ];
         $batchSize = 500; // insert 500 (default), 100 minimum rows in one query
 
-        $result = LaravelBatch::insert($this->model, $this->columns, $values, $batchSize);
+        $result = Batch::insert($this->model, $this->columns, $values, $batchSize);
 
         $this->assertIsArray($result);
         $this->assertTrue($result['totalRows'] == 3);
@@ -63,7 +64,7 @@ class BatchUpdateTest extends BootstrapDatabase
         ];
         $index = 'id';
 
-        $result = LaravelBatch::update($this->model, $columnValues, $index);
+        $result = Batch::update($this->model, $columnValues, $index);
 
         $this->assertTrue($result == 3);
         $this->model->truncate();

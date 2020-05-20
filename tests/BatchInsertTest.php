@@ -1,4 +1,7 @@
 <?php
+
+use Mavinoo\Batch\Batch;
+
 require_once ('BootstrapDatabase.php');
 
 class BatchInsertTest extends BootstrapDatabase
@@ -34,7 +37,7 @@ class BatchInsertTest extends BootstrapDatabase
         ];
         $batchSize = 500; // insert 500 (default), 100 minimum rows in one query
 
-        $result = LaravelBatch::insert($this->model, $this->columns, $values, $batchSize);
+        $result = Batch::insert($this->model, $this->columns, $values, $batchSize);
 
         $this->assertIsArray($result);
         $this->assertTrue($result['totalRows'] == 3);
@@ -73,7 +76,7 @@ class BatchInsertTest extends BootstrapDatabase
         ];
         $batchSize = 500; // insert 500 (default), 100 minimum rows in one query
 
-        $result = LaravelBatch::insert($this->model, $this->columns, $values, $batchSize);
+        $result = Batch::insert($this->model, $this->columns, $values, $batchSize);
         $this->assertFalse($result);
     }
 
