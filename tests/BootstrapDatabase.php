@@ -1,11 +1,10 @@
-<?php
-require_once ('TestModel.php');
+<?php declare(strict_types=1);
 
-use Carbon\Carbon;
+require_once 'TestModel.php';
+
 use Tests\TestCase;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Database\Migrations\Migration;
 
 class BootstrapDatabase extends TestCase
 {
@@ -15,7 +14,7 @@ class BootstrapDatabase extends TestCase
     {
         parent::setUp();
         $tableName = (new TestModel())->tableName();
-        if (!Schema::hasTable($tableName)) {
+        if (! Schema::hasTable($tableName)) {
             Schema::create($tableName, function (Blueprint $table) {
                 $table->increments('id');
                 $table->string('name')->unique();
@@ -29,9 +28,7 @@ class BootstrapDatabase extends TestCase
 
         $this->model = new TestModel();
         $this->model->truncate();
-
     }
-
 
     public function tearDown(): void
     {

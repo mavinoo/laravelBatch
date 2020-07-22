@@ -1,10 +1,10 @@
-<?php
+<?php declare(strict_types=1);
 
 namespace Mavinoo\Batch;
 
-use Illuminate\Database\DatabaseManager;
-use Illuminate\Database\Eloquent\Model;
 use Mavinoo\Batch\Common\Common;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\DatabaseManager;
 
 class Batch implements BatchInterface
 {
@@ -19,12 +19,14 @@ class Batch implements BatchInterface
     }
 
     /**
-     * Update multiple rows
+     * Update multiple rows.
+     *
      * @param Model $table
      * @param array $values
      * @param string $index
+     * @param bool $raw
+     * @return bool|int
      * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
-     *
      * @desc
      * Example
      * $table = 'users';
@@ -41,19 +43,17 @@ class Batch implements BatchInterface
      *     ] ,
      * ];
      * $index = 'id';
-     *
-     * @return bool|int
      */
     public function update(Model $table, array $values, string $index = null, bool $raw = false)
     {
         $final = [];
         $ids = [];
 
-        if (!count($values)) {
+        if (! count($values)) {
             return false;
         }
 
-        if (!isset($index) || empty($index)) {
+        if (! isset($index) || empty($index)) {
             $index = $table->getKeyName();
         }
 
@@ -74,13 +74,14 @@ class Batch implements BatchInterface
                 . 'ELSE `' . $k . '` END), ';
         }
 
-        $query = "UPDATE `" . $this->getFullTableName($table) . "` SET " . substr($cases, 0, -2) . " WHERE `$index` IN(" . '"' . implode('","', $ids) . '"' . ");";
+        $query = 'UPDATE `' . $this->getFullTableName($table) . '` SET ' . substr($cases, 0, -2) . " WHERE `$index` IN(" . '"' . implode('","', $ids) . '"' . ');';
 
         return $this->db->connection($this->getConnectionName($table))->update($query);
     }
 
     /**
-     * Update multiple rows
+     * Update multiple rows.
+     *
      * @param Model $table
      * @param array $values
      * @param string $index
@@ -88,7 +89,6 @@ class Batch implements BatchInterface
      * @param bool $raw
      * @return bool|int
      * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
-     *
      * @desc
      * Example
      * $table = 'users';
@@ -106,29 +106,28 @@ class Batch implements BatchInterface
      * ];
      * $index = 'id';
      * $index2 = 'user_id';
-     *
      */
     public function updateWithTwoIndex(Model $table, array $values, string $index = null, string $index2 = null, bool $raw = false)
     {
         $final = [];
         $ids = [];
 
-        if (!count($values)) {
+        if (! count($values)) {
             return false;
         }
 
-        if (!isset($index) || empty($index)) {
+        if (! isset($index) || empty($index)) {
             $index = $table->getKeyName();
         }
 
         foreach ($values as $key => $val) {
-            $ids[] =  $val[$index];
+            $ids[] = $val[$index];
             $ids2[] = $val[$index2];
             foreach (array_keys($val) as $field) {
-                if ($field !== $index || $field !== $index2 ) {
+                if ($field !== $index || $field !== $index2) {
                     $finalField = $raw ? Common::mysql_escape($val[$field]) : '"' . Common::mysql_escape($val[$field]) . '"';
                     $value = (is_null($val[$field]) ? 'NULL' : $finalField);
-                    $final[$field][] = 'WHEN (`' . $index . '` = "' . Common::mysql_escape($val[$index]) .'" AND `'. $index2 . '` = "' . $val[$index2] .'") THEN ' . $value . ' ';
+                    $final[$field][] = 'WHEN (`' . $index . '` = "' . Common::mysql_escape($val[$index]) . '" AND `' . $index2 . '` = "' . $val[$index2] . '") THEN ' . $value . ' ';
                 }
             }
         }
@@ -136,15 +135,16 @@ class Batch implements BatchInterface
         $cases = '';
         foreach ($final as $k => $v) {
             $cases .= '`' . $k . '` = (CASE ' . implode("\n", $v) . "\n"
-                      . 'ELSE `' . $k . '` END), ';
+                . 'ELSE `' . $k . '` END), ';
         }
-        $query = "UPDATE `" . $this->getFullTableName($table) . "` SET " . substr($cases, 0, -2) . " WHERE `$index` IN(" . '"' . implode('","', $ids) . '")' .  " AND `$index2` IN(" . '"' . implode('","', $ids2) . '"' ." );";
+        $query = 'UPDATE `' . $this->getFullTableName($table) . '` SET ' . substr($cases, 0, -2) . " WHERE `$index` IN(" . '"' . implode('","', $ids) . '")' . " AND `$index2` IN(" . '"' . implode('","', $ids2) . '"' . ' );';
 
         return $this->db->connection($this->getConnectionName($table))->update($query);
     }
 
     /**
-     * Insert Multi rows
+     * Insert Multi rows.
+     *
      * @param Model $table
      * @param array $columns
      * @param array $values
@@ -153,7 +153,6 @@ class Batch implements BatchInterface
      * @return bool|mixed
      * @throws \Throwable
      * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
-     *
      * @desc
      * Example
      *
@@ -194,7 +193,7 @@ class Batch implements BatchInterface
     {
         // no need for the old validation since we now use type hint that supports from php 7.0
         // but I kept this one
-        if (count($columns) != count($values[0])) {
+        if (count($columns) !== count($values[0])) {
             return false;
         }
 
@@ -209,7 +208,7 @@ class Batch implements BatchInterface
         $values = array_chunk($values, $totalChunk, true);
 
         foreach ($columns as $key => $column) {
-            $columns[$key] = "`" . Common::mysql_escape($column) . "`";
+            $columns[$key] = '`' . Common::mysql_escape($column) . '`';
         }
 
         foreach ($values as $value) {
@@ -225,14 +224,13 @@ class Batch implements BatchInterface
 
             $valueString = implode(', ', $valueArray);
 
-            $ignoreStmt =  $insertIgnore ? ' IGNORE ' : '';
+            $ignoreStmt = $insertIgnore ? ' IGNORE ' : '';
 
-            $query[] = "INSERT ".$ignoreStmt." INTO `" . $this->getFullTableName($table) . "` (" . implode(',', $columns) . ") VALUES $valueString;";
+            $query[] = 'INSERT ' . $ignoreStmt . ' INTO `' . $this->getFullTableName($table) . '` (' . implode(',', $columns) . ") VALUES $valueString;";
         }
 
         if (count($query)) {
             return $this->db->transaction(function () use ($totalValues, $totalChunk, $query, $table) {
-
                 $totalQuery = 0;
                 foreach ($query as $value) {
                     $totalQuery += $this->db->connection($this->getConnectionName($table))->statement($value) ? 1 : 0;
@@ -250,6 +248,8 @@ class Batch implements BatchInterface
     }
 
     /**
+     * Get full table name.
+     *
      * @param Model $model
      * @return string
      * @author Ibrahim Sakr <ebrahimes@gmail.com>
@@ -260,14 +260,17 @@ class Batch implements BatchInterface
     }
 
     /**
+     * Get connection name.
+     *
      * @param Model $model
      * @return string|null
      * @author Ibrahim Sakr <ebrahimes@gmail.com>
      */
     private function getConnectionName(Model $model)
     {
-        if (!is_null($cn = $model->getConnectionName()))
+        if (! is_null($cn = $model->getConnectionName())) {
             return $cn;
+        }
 
         return $model->getConnection()->getName();
     }

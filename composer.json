@@ -9,7 +9,9 @@
             "email": "mavin.developer@gmail.com"
         }
     ],
-    "require": {},
+    "require": {
+        "phpunit/phpunit": "^9.3@dev"
+    },
     "autoload": {
         "psr-4": {
             "Mavinoo\\Batch\\": "src/"

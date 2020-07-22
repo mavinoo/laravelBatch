@@ -1,5 +1,7 @@
-<?php
-require_once ('BootstrapDatabase.php');
+<?php declare(strict_types=1);
+
+require_once 'BootstrapDatabase.php';
+
 use Carbon\Carbon;
 use Mavinoo\Batch\Batch;
 
@@ -39,8 +41,8 @@ class BatchUpdateTest extends BootstrapDatabase
         $result = Batch::insert($this->model, $this->columns, $values, $batchSize);
 
         $this->assertIsArray($result);
-        $this->assertTrue($result['totalRows'] == 3);
-        $this->assertTrue($result['totalBatch'] == 500);
+        $this->assertTrue($result['totalRows'] === 3);
+        $this->assertTrue($result['totalBatch'] === 500);
     }
 
     public function testBatchUpdateWithFacade()
@@ -66,7 +68,7 @@ class BatchUpdateTest extends BootstrapDatabase
 
         $result = Batch::update($this->model, $columnValues, $index);
 
-        $this->assertTrue($result == 3);
+        $this->assertTrue($result === 3);
         $this->model->truncate();
     }
 
@@ -93,7 +95,7 @@ class BatchUpdateTest extends BootstrapDatabase
 
         $result = batch()->update($this->model, $columnValues, $index);
 
-        $this->assertTrue($result == 3);
+        $this->assertTrue($result === 3);
         $this->model->truncate();
     }
 }
