@@ -1,8 +1,8 @@
-<?php
+<?php declare(strict_types=1);
 
 use Mavinoo\Batch\Batch;
 
-require_once ('BootstrapDatabase.php');
+require_once 'BootstrapDatabase.php';
 
 class BatchInsertTest extends BootstrapDatabase
 {
@@ -40,14 +40,13 @@ class BatchInsertTest extends BootstrapDatabase
         $result = Batch::insert($this->model, $this->columns, $values, $batchSize);
 
         $this->assertIsArray($result);
-        $this->assertTrue($result['totalRows'] == 3);
-        $this->assertTrue($result['totalBatch'] == 500);
+        $this->assertTrue($result['totalRows'] === 3);
+        $this->assertTrue($result['totalBatch'] === 500);
         $this->model->truncate();
     }
 
     public function testBatchInsertIncorrectColumnCount()
     {
-
         $columns = [
             'email',
             'password',
@@ -80,7 +79,6 @@ class BatchInsertTest extends BootstrapDatabase
         $this->assertFalse($result);
     }
 
-
     public function testBatchInsertWithHelper()
     {
         $values = [
@@ -108,8 +106,8 @@ class BatchInsertTest extends BootstrapDatabase
         $result = batch()->insert($this->model, $this->columns, $values, $batchSize);
 
         $this->assertIsArray($result);
-        $this->assertTrue($result['totalRows'] == 3);
-        $this->assertTrue($result['totalBatch'] == 500);
+        $this->assertTrue($result['totalRows'] === 3);
+        $this->assertTrue($result['totalBatch'] === 500);
         $this->model->truncate();
     }
 }
