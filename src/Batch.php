@@ -59,6 +59,15 @@ class Batch implements BatchInterface
     
             foreach ($values as $key => $val) {
                 $ids[] = $val[$index];
+
+                if ($table->usesTimestamps()) {
+                    $updatedAtColumn = $table->getUpdatedAtColumn();
+    
+                    if (!isset($val[$updatedAtColumn])) {
+                        $val[$updatedAtColumn] = now()->format($table->getDateFormat());
+                    }
+                }
+
                 foreach (array_keys($val) as $field) {
                     if ($field !== $index) {
                         $finalField = $raw ? Common::mysql_escape($val[$field]) : "'" . Common::mysql_escape($val[$field]) . "'";
@@ -162,6 +171,37 @@ class Batch implements BatchInterface
         $totalChunk = ($batchSizeInsert < $minChunck) ? $minChunck : $batchSizeInsert;
 
         $values = array_chunk($values, $totalChunk, true);
+
+        if ($table->usesTimestamps()) {
+            $createdAtColumn = $table->getCreatedAtColumn();
+            $updatedAtColumn = $table->getUpdatedAtColumn();
+            $now = now()->format($table->getDateFormat());
+
+            $addCreatedAtValue = false;
+            $addUpdatedAtValue = false;
+
+            if (!in_array($createdAtColumn, $columns)) {
+                $addCreatedAtValue = true;
+                array_push($columns, $createdAtColumn);
+            }
+
+            if (!in_array($updatedAtColumn, $columns)) {
+                $addUpdatedAtValue = true;
+                array_push($columns, $updatedAtColumn);
+            }
+
+            foreach ($values as $key => $value) {
+                foreach ($value as $rowKey => $row) {
+                    if ($addCreatedAtValue) {
+                        array_push($values[$key][$rowKey], $now);
+                    }
+
+                    if ($addUpdatedAtValue) {
+                        array_push($values[$key][$rowKey], $now);
+                    }
+                }
+            }
+        }
 
         foreach ($columns as $key => $column) {
             $columns[$key] = '`' . Common::mysql_escape($column) . '`';
