@@ -72,7 +72,7 @@ class Batch implements BatchInterface
                     if ($field !== $index) {
                         $finalField = $raw ? Common::mysql_escape($val[$field]) : "'" . Common::mysql_escape($val[$field]) . "'";
                         $value = (is_null($val[$field]) ? 'NULL' : $finalField);
-                        $final[$field][] = 'WHEN "' . $index . '" = \'' . $val[$index] . '\' THEN ' . $value . ' ';
+                        $final[$field][] = 'WHEN `' . $index . '` = \'' . $val[$index] . '\' THEN ' . $value . ' ';
                     }
                 }
             }
