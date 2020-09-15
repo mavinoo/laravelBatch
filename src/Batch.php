@@ -108,6 +108,70 @@ class Batch implements BatchInterface
     }
 
     /**
+     * Update multiple rows
+     * @param Model $table
+     * @param array $values
+     * @param string $index
+     * @param string|null $index2
+     * @param bool $raw
+     * @return bool|int
+     * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
+     *
+     * @desc
+     * Example
+     * $table = 'users';
+     * $value = [
+     *     [
+     *         'id' => 1,
+     *         'status' => 'active',
+     *         'nickname' => 'Mohammad'
+     *     ] ,
+     *     [
+     *         'id' => 5,
+     *         'status' => 'deactive',
+     *         'nickname' => 'Ghanbari'
+     *     ] ,
+     * ];
+     * $index = 'id';
+     * $index2 = 'user_id';
+     *
+     */
+    public function updateWithTwoIndex(Model $table, array $values, string $index = null, string $index2 = null, bool $raw = false)
+    {
+        $final = [];
+        $ids = [];
+
+        if (!count($values)) {
+            return false;
+        }
+
+        if (!isset($index) || empty($index)) {
+            $index = $table->getKeyName();
+        }
+
+        foreach ($values as $key => $val) {
+            $ids[] =  $val[$index];
+            $ids2[] = $val[$index2];
+            foreach (array_keys($val) as $field) {
+                if ($field !== $index || $field !== $index2 ) {
+                    $finalField = $raw ? Common::mysql_escape($val[$field]) : '"' . Common::mysql_escape($val[$field]) . '"';
+                    $value = (is_null($val[$field]) ? 'NULL' : $finalField);
+                    $final[$field][] = 'WHEN (`' . $index . '` = "' . Common::mysql_escape($val[$index]) .'" AND `'. $index2 . '` = "' . $val[$index2] .'") THEN ' . $value . ' ';
+                }
+            }
+        }
+
+        $cases = '';
+        foreach ($final as $k => $v) {
+            $cases .= '`' . $k . '` = (CASE ' . implode("\n", $v) . "\n"
+                      . 'ELSE `' . $k . '` END), ';
+        }
+        $query = "UPDATE `" . $this->getFullTableName($table) . "` SET " . substr($cases, 0, -2) . " WHERE `$index` IN(" . '"' . implode('","', $ids) . '")' .  " AND `$index2` IN(" . '"' . implode('","', $ids2) . '"' ." );";
+
+        return $this->db->connection($this->getConnectionName($table))->update($query);
+    }
+
+    /**
      * Insert Multi rows.
      *
      * @param Model $table
