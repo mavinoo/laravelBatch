@@ -49,62 +49,64 @@ class Batch implements BatchInterface
         $final = [];
         $ids = [];
 
-              if (!count($values)) {
-                return false;
-            }
-    
-            if (!isset($index) || empty($index)) {
-                $index = $table->getKeyName();
-            }
-    
-            foreach ($values as $key => $val) {
-                $ids[] = $val[$index];
+        if (!count($values)) {
+            return false;
+        }
 
-                if ($table->usesTimestamps()) {
-                    $updatedAtColumn = $table->getUpdatedAtColumn();
-    
-                    if (!isset($val[$updatedAtColumn])) {
-                        $val[$updatedAtColumn] = now()->format($table->getDateFormat());
-                    }
+        if (!isset($index) || empty($index)) {
+            $index = $table->getKeyName();
+        }
+
+        $connection = config('database.default');
+        $driver = config("database.connections.{$connection}.driver");
+
+        foreach ($values as $key => $val) {
+            $ids[] = $val[$index];
+
+            if ($table->usesTimestamps()) {
+                $updatedAtColumn = $table->getUpdatedAtColumn();
+
+                if (!isset($val[$updatedAtColumn])) {
+                    $val[$updatedAtColumn] = now()->format($table->getDateFormat());
                 }
+            }
 
-                foreach (array_keys($val) as $field) {
-                    if ($field !== $index) {
-                        $finalField = $raw ? Common::mysql_escape($val[$field]) : "'" . Common::mysql_escape($val[$field]) . "'";
-                        $value = (is_null($val[$field]) ? 'NULL' : $finalField);
+            foreach (array_keys($val) as $field) {
+                if ($field !== $index) {
+                    $finalField = $raw ? Common::mysql_escape($val[$field]) : "'" . Common::mysql_escape($val[$field]) . "'";
+                    $value = (is_null($val[$field]) ? 'NULL' : $finalField);
+                    if ($driver == 'pgsql')
+                        $final[$field][] = 'WHEN ' . $index . ' = \'' . $val[$index] . '\' THEN ' . $value . ' ';
+                    else
                         $final[$field][] = 'WHEN `' . $index . '` = \'' . $val[$index] . '\' THEN ' . $value . ' ';
-                    }
                 }
             }
-    
-            $connection = config('database.default');
-    
-            $driver = config("database.connections.{$connection}.driver");
-    
-            if ( $driver == 'pgsql' ){
-    
-                $cases = '';
-                foreach ($final as $k => $v) {
-                    $cases .= '"' . $k . '" = (CASE ' . implode("\n", $v) . "\n"
-                        . 'ELSE "' . $k . '" END), ';
-                }
-    
-                $query = "UPDATE \"" . $this->getFullTableName($table) . '" SET ' . substr($cases, 0, -2) . " WHERE \"$index\" IN('" . implode("','", $ids) . "');";
-    
-            }else{
-    
-                $cases = '';
-                foreach ($final as $k => $v) {
-                    $cases .= '`' . $k . '` = (CASE ' . implode("\n", $v) . "\n"
-                        . 'ELSE `' . $k . '` END), ';
-                }
-    
-                $query = "UPDATE `" . $this->getFullTableName($table) . "` SET " . substr($cases, 0, -2) . " WHERE `$index` IN(" . '"' . implode('","', $ids) . '"' . ");";
-    
+        }
+
+        if ($driver == 'pgsql') {
+
+            $cases = '';
+            foreach ($final as $k => $v) {
+                $cases .= '"' . $k . '" = (CASE ' . implode("\n", $v) . "\n"
+                    . 'ELSE "' . $k . '" END), ';
             }
-    
-    
-            return $this->db->connection($this->getConnectionName($table))->update($query);
+
+            $query = "UPDATE \"" . $this->getFullTableName($table) . '" SET ' . substr($cases, 0, -2) . " WHERE \"$index\" IN('" . implode("','", $ids) . "');";
+
+        } else {
+
+            $cases = '';
+            foreach ($final as $k => $v) {
+                $cases .= '`' . $k . '` = (CASE ' . implode("\n", $v) . "\n"
+                    . 'ELSE `' . $k . '` END), ';
+            }
+
+            $query = "UPDATE `" . $this->getFullTableName($table) . "` SET " . substr($cases, 0, -2) . " WHERE `$index` IN(" . '"' . implode('","', $ids) . '"' . ");";
+
+        }
+
+
+        return $this->db->connection($this->getConnectionName($table))->update($query);
     }
 
     /**
@@ -150,13 +152,13 @@ class Batch implements BatchInterface
         }
 
         foreach ($values as $key => $val) {
-            $ids[] =  $val[$index];
+            $ids[] = $val[$index];
             $ids2[] = $val[$index2];
             foreach (array_keys($val) as $field) {
-                if ($field !== $index || $field !== $index2 ) {
+                if ($field !== $index || $field !== $index2) {
                     $finalField = $raw ? Common::mysql_escape($val[$field]) : '"' . Common::mysql_escape($val[$field]) . '"';
                     $value = (is_null($val[$field]) ? 'NULL' : $finalField);
-                    $final[$field][] = 'WHEN (`' . $index . '` = "' . Common::mysql_escape($val[$index]) .'" AND `'. $index2 . '` = "' . $val[$index2] .'") THEN ' . $value . ' ';
+                    $final[$field][] = 'WHEN (`' . $index . '` = "' . Common::mysql_escape($val[$index]) . '" AND `' . $index2 . '` = "' . $val[$index2] . '") THEN ' . $value . ' ';
                 }
             }
         }
@@ -164,9 +166,9 @@ class Batch implements BatchInterface
         $cases = '';
         foreach ($final as $k => $v) {
             $cases .= '`' . $k . '` = (CASE ' . implode("\n", $v) . "\n"
-                      . 'ELSE `' . $k . '` END), ';
+                . 'ELSE `' . $k . '` END), ';
         }
-        $query = "UPDATE `" . $this->getFullTableName($table) . "` SET " . substr($cases, 0, -2) . " WHERE `$index` IN(" . '"' . implode('","', $ids) . '")' .  " AND `$index2` IN(" . '"' . implode('","', $ids2) . '"' ." );";
+        $query = "UPDATE `" . $this->getFullTableName($table) . "` SET " . substr($cases, 0, -2) . " WHERE `$index` IN(" . '"' . implode('","', $ids) . '")' . " AND `$index2` IN(" . '"' . implode('","', $ids2) . '"' . " );";
 
         return $this->db->connection($this->getConnectionName($table))->update($query);
     }
@@ -328,7 +330,7 @@ class Batch implements BatchInterface
      */
     private function getConnectionName(Model $model)
     {
-        if (! is_null($cn = $model->getConnectionName())) {
+        if (!is_null($cn = $model->getConnectionName())) {
             return $cn;
         }
 
