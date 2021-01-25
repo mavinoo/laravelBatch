@@ -26,4 +26,23 @@ class Common
 
         return $fieldValue;
     }
+
+    /**
+     * Convert boolean values to 0 or 1.
+     *
+     * @param $fieldValue
+     * @return array|string|bool|string[]|bool[]
+     */
+    public static function convertBoolean($fieldValue)
+    {
+        if (is_array($fieldValue)) {
+            return array_map(__METHOD__, $fieldValue);
+        }
+
+        if (is_bool($fieldValue)) {
+            return (int) $fieldValue;
+        }
+
+        return $fieldValue;
+    }
 }
