@@ -74,7 +74,7 @@ class Batch implements BatchInterface
             foreach (array_keys($val) as $field) {
                 if ($field !== $index) {
                     $finalField = $raw ? Common::mysql_escape($val[$field]) : "'" . Common::mysql_escape($val[$field]) . "'";
-                    $value = (is_null($val[$field]) ? 'NULL' : Common::convertBoolean($finalField));
+                    $value = (is_null($val[$field]) ? 'NULL' : $finalField);
                     if ($driver == 'pgsql')
                         $final[$field][] = 'WHEN ' . $index . ' = \'' . $val[$index] . '\' THEN ' . $value . ' ';
                     else

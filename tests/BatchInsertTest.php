@@ -11,6 +11,7 @@ class BatchInsertTest extends BootstrapDatabase
         'password',
         'name',
         'status',
+        'is_vip'
     ];
 
     public function testBatchInsertWithFacade()
@@ -20,19 +21,22 @@ class BatchInsertTest extends BootstrapDatabase
                 'djunehor@gmail.com',
                 bcrypt('djunehor'),
                 'djunehor',
-                'active'
+                'active',
+                true,
             ],
             [
                 'samuel@gmail.com',
                 bcrypt('samuel'),
                 'samuel',
-                'whodey'
+                'whodey',
+                false,
             ],
             [
                 'general@gmail.com',
                 bcrypt('general'),
                 'general',
                 'inactive',
+                false,
             ]
         ];
         $batchSize = 500; // insert 500 (default), 100 minimum rows in one query
@@ -59,12 +63,13 @@ class BatchInsertTest extends BootstrapDatabase
                 'djunehor@gmail.com',
                 bcrypt('djunehor'),
                 'djunehor',
+                'active',
             ],
             [
                 'samuel@gmail.com',
                 bcrypt('samuel'),
                 'samuel',
-                'whodey'
+                'whodey',
             ],
             [
                 'general@gmail.com',
@@ -86,19 +91,22 @@ class BatchInsertTest extends BootstrapDatabase
                 'djunehor@gmail.com',
                 bcrypt('djunehor'),
                 'djunehor',
-                'active'
+                'active',
+                true,
             ],
             [
                 'samuel@gmail.com',
                 bcrypt('samuel'),
                 'samuel',
-                'whodey'
+                'whodey',
+                false,
             ],
             [
                 'general@gmail.com',
                 bcrypt('general'),
                 'general',
                 'inactive',
+                false,
             ]
         ];
         $batchSize = 500; // insert 500 (default), 100 minimum rows in one query
