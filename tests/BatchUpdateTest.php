@@ -12,6 +12,7 @@ class BatchUpdateTest extends BootstrapDatabase
         'password',
         'name',
         'status',
+        'is_vip',
     ];
 
     private function insert()
@@ -21,19 +22,22 @@ class BatchUpdateTest extends BootstrapDatabase
                 'djunehor@gmail.com',
                 bcrypt('djunehor'),
                 'djunehor',
-                'active'
+                'active',
+                true,
             ],
             [
                 'samuel@gmail.com',
                 bcrypt('samuel'),
                 'samuel',
-                'whodey'
+                'whodey',
+                false,
             ],
             [
                 'general@gmail.com',
                 bcrypt('general'),
                 'general',
                 'inactive',
+                false,
             ]
         ];
         $batchSize = 500; // insert 500 (default), 100 minimum rows in one query
@@ -51,7 +55,8 @@ class BatchUpdateTest extends BootstrapDatabase
         $columnValues = [
             [
                 'id' => 1,
-                'status' => 'amala'
+                'name' => 'amala',
+                'is_vip' => false
             ],
             [
                 'id' => 2,
@@ -68,7 +73,12 @@ class BatchUpdateTest extends BootstrapDatabase
 
         $result = Batch::update($this->model, $columnValues, $index);
 
+        $member = $this->model->findOrFail(1);
+
         $this->assertTrue($result === 3);
+        $this->assertEquals('amala', $member->name);
+        $this->assertFalse($member->is_vip);
+
         $this->model->truncate();
     }
 
@@ -78,7 +88,8 @@ class BatchUpdateTest extends BootstrapDatabase
         $columnValues = [
             [
                 'id' => 1,
-                'status' => 'amala'
+                'name' => 'amala',
+                'is_vip' => false
             ],
             [
                 'id' => 2,
@@ -95,7 +106,12 @@ class BatchUpdateTest extends BootstrapDatabase
 
         $result = batch()->update($this->model, $columnValues, $index);
 
+        $member = $this->model->findOrFail(1);
+
         $this->assertTrue($result === 3);
+        $this->assertEquals('amala', $member->name);
+        $this->assertFalse($member->is_vip);
+
         $this->model->truncate();
     }
 }

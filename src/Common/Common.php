@@ -16,6 +16,10 @@ class Common
             return array_map(__METHOD__, $fieldValue);
         }
 
+        if (is_bool($fieldValue)) {
+            return (int) $fieldValue;
+        }
+
         if (!empty($fieldValue) && is_string($fieldValue)) {
             return str_replace(
                 ['\\', "\0", "\n", "\r", "'", '"', "\x1a"],
