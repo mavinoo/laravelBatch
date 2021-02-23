@@ -74,6 +74,39 @@ $index = 'id';
 Batch::update($userInstance, $value, $index);
 ```
 
+# Example Increment / Decrement
+
+```php
+use App\Models\User;
+
+$userInstance = new User;
+$value = [
+     [
+         'id' => 1,
+         'balance' => '+500' // Add
+     ] ,
+     [
+         'id' => 2,
+         'balance' => '-200' // Subtract
+     ] ,
+     [
+         'id' => 3,
+         'balance' => '*5' // Multiply
+     ] ,
+     [
+         'id' => 4,
+         'balance' => '/2' // Divide
+     ] ,
+     [
+         'id' => 5,
+         'balance' => '%2' // Modulo
+     ] ,
+];
+$index = 'id';
+
+Batch::update($userInstance, $value, $index);
+```
+
 # Example Insert
 
 ```php
