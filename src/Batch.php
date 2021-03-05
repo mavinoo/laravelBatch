@@ -19,30 +19,37 @@ class Batch implements BatchInterface
     }
 
     /**
-     * Update multiple rows.
+     * <h2>Update multiple rows.</h2>
      *
-     * @param Model $table
-     * @param array $values
-     * @param string $index
-     * @param bool $raw
-     * @return bool|int
-     * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
-     * @desc
-     * Example
-     * $table = 'users';
+     * Example:<br>
+     * ```
+     * $userInstance = new \App\Models\User;
      * $value = [
      *     [
      *         'id' => 1,
      *         'status' => 'active',
      *         'nickname' => 'Mohammad'
-     *     ] ,
+     *     ],
      *     [
      *         'id' => 5,
      *         'status' => 'deactive',
      *         'nickname' => 'Ghanbari'
-     *     ] ,
+     *     ],
+     *     [
+     *         'id' => 7,
+     *         'balance' => ['+', 500]
+     *     ]
      * ];
      * $index = 'id';
+     * Batch::update($userInstance, $value, $index);
+     * ```
+     *
+     * @param \Illuminate\Database\Eloquent\Model $table
+     * @param array $values
+     * @param string $index
+     * @param bool $raw
+     * @return bool|int
+     * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
      */
     public function update(Model $table, array $values, string $index = null, bool $raw = false)
     {
@@ -73,12 +80,28 @@ class Batch implements BatchInterface
 
             foreach (array_keys($val) as $field) {
                 if ($field !== $index) {
-                    if (gettype($val[$field]) == 'string' && !empty($val[$field]) && str_replace(['+', '-', '*', '/', '%'], '', $val[$field][0]) !== $val[$field][0]) {
-                        $value = '`' . $field . '`' . $val[$field];
+                    // If increment / decrement
+                    if (gettype($val[$field]) == 'array') {
+                        // If array has two values
+                        if (!array_key_exists(0, $val[$field]) || !array_key_exists(1, $val[$field])) {
+                            throw new \ArgumentCountError('Increment/Decrement array needs to have 2 values, a math operator (+, -, *, /, %) and a number');
+                        }
+                        // Check first value
+                        if (gettype($val[$field][0]) != 'string' || !in_array($val[$field][0], ['+', '-', '*', '/', '%'])) {
+                            throw new \TypeError('First value in Increment/Decrement array needs to be a string and a math operator (+, -, *, /, %)');
+                        }
+                        // Check second value
+                        if (!is_numeric($val[$field][1])) {
+                            throw new \TypeError('Second value in Increment/Decrement array needs to be numeric');
+                        }
+                        // Increment / decrement
+                        $value = '`' . $field . '`' . $val[$field][0] . $val[$field][1];
                     } else {
+                        // Only update
                         $finalField = $raw ? Common::mysql_escape($val[$field]) : "'" . Common::mysql_escape($val[$field]) . "'";
                         $value = (is_null($val[$field]) ? 'NULL' : $finalField);
                     }
+
                     if ($driver == 'pgsql')
                         $final[$field][] = 'WHEN ' . $index . ' = \'' . $val[$index] . '\' THEN ' . $value . ' ';
                     else
