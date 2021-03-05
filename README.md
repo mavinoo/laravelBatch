@@ -83,23 +83,23 @@ $userInstance = new User;
 $value = [
      [
          'id' => 1,
-         'balance' => '+500' // Add
+         'balance' => ['+', 500] // Add
      ] ,
      [
          'id' => 2,
-         'balance' => '-200' // Subtract
+         'balance' => ['-', 200] // Subtract
      ] ,
      [
          'id' => 3,
-         'balance' => '*5' // Multiply
+         'balance' => ['*', 5] // Multiply
      ] ,
      [
          'id' => 4,
-         'balance' => '/2' // Divide
+         'balance' => ['/', 2] // Divide
      ] ,
      [
          'id' => 5,
-         'balance' => '%2' // Modulo
+         'balance' => ['%', 2] // Modulo
      ] ,
 ];
 $index = 'id';
