@@ -5,6 +5,7 @@ namespace Mavinoo\Batch;
 use Mavinoo\Batch\Common\Common;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Support\Carbon;
 
 class Batch implements BatchInterface
 {
@@ -74,7 +75,7 @@ class Batch implements BatchInterface
                 $updatedAtColumn = $table->getUpdatedAtColumn();
 
                 if (!isset($val[$updatedAtColumn])) {
-                    $val[$updatedAtColumn] = now()->format($table->getDateFormat());
+                    $val[$updatedAtColumn] = Carbon::now()->format($table->getDateFormat());
                 }
             }
 
@@ -289,7 +290,7 @@ class Batch implements BatchInterface
         if ($table->usesTimestamps()) {
             $createdAtColumn = $table->getCreatedAtColumn();
             $updatedAtColumn = $table->getUpdatedAtColumn();
-            $now = now()->format($table->getDateFormat());
+            $now = Carbon::now()->format($table->getDateFormat());
 
             $addCreatedAtValue = false;
             $addUpdatedAtValue = false;
