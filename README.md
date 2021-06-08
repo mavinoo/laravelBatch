@@ -180,3 +180,6 @@ $result = batch()->insert($userInstance, $columns, $values, $batchSize);
 If you don't have phpunit installed on your project, first run `composer require phpunit/phpunit`
 
 In the root of your laravel app, run `./vendor/bin/phpunit ./vendor/mavinoo/laravel-batch/tests`
+
+# Donate 
+BTC Address: 16XDxkcqiEJ8DYf4xWxu7WK3Peo29TvXxD
