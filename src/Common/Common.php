@@ -37,6 +37,9 @@ class Common
 
     protected static function is_json($str): bool
     {
+        if (!is_string($str)){
+            return false;
+        }
         return json_decode($str, true) !== null;
     }
 }
