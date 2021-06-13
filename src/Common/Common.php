@@ -20,6 +20,10 @@ class Common
             return (int) $fieldValue;
         }
 
+        if(self::is_json($fieldValue)){
+            return $fieldValue;
+        }
+
         if (!empty($fieldValue) && is_string($fieldValue)) {
             return str_replace(
                 ['\\', "\0", "\n", "\r", "'", '"', "\x1a"],
@@ -29,5 +33,13 @@ class Common
         }
 
         return $fieldValue;
+    }
+
+    protected static function is_json($str): bool
+    {
+        if (!is_string($str)){
+            return false;
+        }
+        return json_decode($str, true) !== null;
     }
 }
