@@ -54,6 +54,9 @@ class Common
     protected static function safeJson($jsonData,$asArray = false){
         $jsonData = json_decode($jsonData,true);
         $safeJsonData = [];
+        if (!is_array($jsonData)){
+            return $jsonData;
+        }
         foreach ($jsonData as $key => $value){
             if (self::is_json($value)){
                 $safeJsonData[$key] = self::safeJson($value,true);
