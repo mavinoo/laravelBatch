@@ -55,7 +55,6 @@ class Common
         $jsonData = json_decode($jsonData,true);
         $safeJsonData = [];
         foreach ($jsonData as $key => $value){
-            var_dump($value);
             if (self::is_json($value)){
                 $safeJsonData[$key] = self::safeJson($value,true);
             }elseif(is_string($value)){
@@ -68,6 +67,5 @@ class Common
         }
         return $asArray ? $safeJsonData : json_encode($safeJsonData);
     }
-
 
 }
