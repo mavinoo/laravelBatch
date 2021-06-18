@@ -21,18 +21,22 @@ class Common
         }
 
         if(self::is_json($fieldValue)){
-            return $fieldValue;
+            return self::safeString($fieldValue);
         }
 
         if (!empty($fieldValue) && is_string($fieldValue)) {
-            return str_replace(
-                ['\\', "\0", "\n", "\r", "'", '"', "\x1a"],
-                ['\\\\', '\\0', '\\n', '\\r', "\\'", '\\"', '\\Z'],
-                $fieldValue
-            );
+            return self::safeJson($fieldValue);
         }
 
         return $fieldValue;
+    }
+
+    protected static function safeString($fieldValue){
+        return str_replace(
+            ['\\', "\0", "\n", "\r", "'", '"', "\x1a"],
+            ['\\\\', '\\0', '\\n', '\\r', "\\'", '\\"', '\\Z'],
+            $fieldValue
+        );
     }
 
     protected static function is_json($str): bool
@@ -42,4 +46,20 @@ class Common
         }
         return json_decode($str, true) !== null;
     }
+
+    protected static function safeJson($jsonData,$asArray = false){
+        $jsonData = json_decode($jsonData,true);
+        $safeJsonData = [];
+        foreach ($jsonData as $key => $value){
+            if (self::is_json($value)){
+                $safeJsonData[$key] = self::safeJson($jsonData,true);
+            }elseif(is_string($value)){
+                $safeJsonData[$key] = self::safeString($value);
+            }else{
+                $safeJsonData[$key] = $value;
+            }
+        }
+        return $asArray ? $safeJsonData : json_encode($safeJsonData);
+    }
+
 }
