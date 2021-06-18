@@ -58,7 +58,7 @@ class Common
             if (self::is_json($value)){
                 $safeJsonData[$key] = self::safeJson($jsonData,true);
             }elseif(is_string($value)){
-                $safeJsonData[$key] = $value;
+                $safeJsonData[$key] = self::safeJsonString($value);
             }else{
                 $safeJsonData[$key] = $value;
             }
