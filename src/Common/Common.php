@@ -25,16 +25,20 @@ class Common
         }
 
         if (!empty($fieldValue) && is_string($fieldValue)) {
-            return self::safeString($fieldValue);
+            return str_replace(
+                ['\\', "\0", "\n", "\r", "'", '"', "\x1a"],
+                ['\\\\', '\\0', '\\n', '\\r', "\\'", '\\"', '\\Z'],
+                $fieldValue
+            );
         }
 
         return $fieldValue;
     }
 
-    protected static function safeString($fieldValue){
+    protected static function safeJsonString($fieldValue){
         return str_replace(
-            ['\\', "\0", "\n", "\r", "'", '"', "\x1a"],
-            ['\\\\', '\\0', '\\n', '\\r', "\\'", '\\"', '\\Z'],
+            ["'"],
+            ["\'"],
             $fieldValue
         );
     }
@@ -54,7 +58,7 @@ class Common
             if (self::is_json($value)){
                 $safeJsonData[$key] = self::safeJson($jsonData,true);
             }elseif(is_string($value)){
-                $safeJsonData[$key] = self::safeString($value);
+                $safeJsonData[$key] = self::safeJsonString($value);
             }else{
                 $safeJsonData[$key] = $value;
             }
