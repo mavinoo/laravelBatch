@@ -38,7 +38,7 @@ class Common
     protected static function safeJsonString($fieldValue){
         return str_replace(
             ["'"],
-            ["\\'"],
+            ["''"],
             $fieldValue
         );
     }
