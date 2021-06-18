@@ -21,11 +21,11 @@ class Common
         }
 
         if(self::is_json($fieldValue)){
-            return self::safeString($fieldValue);
+            return self::safeJson($fieldValue);
         }
 
         if (!empty($fieldValue) && is_string($fieldValue)) {
-            return self::safeJson($fieldValue);
+            return self::safeString($fieldValue);
         }
 
         return $fieldValue;
