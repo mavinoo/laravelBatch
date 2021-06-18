@@ -21,7 +21,7 @@ class Common
         }
 
         if(self::is_json($fieldValue)){
-            return self::safeJson($fieldValue);
+            return $fieldValue;
         }
 
         if (!empty($fieldValue) && is_string($fieldValue)) {
