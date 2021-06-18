@@ -21,7 +21,7 @@ class Common
         }
 
         if(self::is_json($fieldValue)){
-            return $fieldValue;
+            return self::safeJson($fieldValue);
         }
 
         if (!empty($fieldValue) && is_string($fieldValue)) {
@@ -38,7 +38,7 @@ class Common
     protected static function safeJsonString($fieldValue){
         return str_replace(
             ["'"],
-            ["\'"],
+            ["\\'"],
             $fieldValue
         );
     }
