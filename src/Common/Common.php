@@ -21,7 +21,7 @@ class Common
         }
 
         if(self::is_json($fieldValue)){
-            return $fieldValue;
+            return self::safeJson($fieldValue);
         }
 
         if (!empty($fieldValue) && is_string($fieldValue)) {
@@ -35,6 +35,14 @@ class Common
         return $fieldValue;
     }
 
+    protected static function safeJsonString($fieldValue){
+        return str_replace(
+            ["'"],
+            ["''"],
+            $fieldValue
+        );
+    }
+
     protected static function is_json($str): bool
     {
         if (!is_string($str)){
@@ -42,4 +50,25 @@ class Common
         }
         return json_decode($str, true) !== null;
     }
+
+    protected static function safeJson($jsonData,$asArray = false){
+        $jsonData = json_decode($jsonData,true);
+        $safeJsonData = [];
+        if (!is_array($jsonData)){
+            return $jsonData;
+        }
+        foreach ($jsonData as $key => $value){
+            if (self::is_json($value)){
+                $safeJsonData[$key] = self::safeJson($value,true);
+            }elseif(is_string($value)){
+                $safeJsonData[$key] = self::safeJsonString($value);
+            }elseif(is_array($value)){
+                $safeJsonData[$key] = self::safeJson(json_encode($value),true);
+            }else{
+                $safeJsonData[$key] = $value;
+            }
+        }
+        return $asArray ? $safeJsonData : json_encode($safeJsonData);
+    }
+
 }
