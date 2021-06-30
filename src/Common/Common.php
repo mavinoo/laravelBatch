@@ -35,6 +35,12 @@ class Common
         return $fieldValue;
     }
 
+    /**
+     * Disable Backtick.
+     *
+     * @param $drive
+     * @return boolean
+     */
     public static function disableBacktick($drive)
     {
         return in_array($drive, ['pgsql', 'sqlsrv']);
