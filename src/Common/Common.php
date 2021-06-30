@@ -17,10 +17,10 @@ class Common
         }
 
         if (is_bool($fieldValue)) {
-            return (int) $fieldValue;
+            return (int)$fieldValue;
         }
 
-        if(self::is_json($fieldValue)){
+        if (self::is_json($fieldValue)) {
             return self::safeJson($fieldValue);
         }
 
@@ -35,7 +35,13 @@ class Common
         return $fieldValue;
     }
 
-    protected static function safeJsonString($fieldValue){
+    public static function disableBacktick($drive)
+    {
+        return in_array($drive, ['pgsql', 'sqlsrv']);
+    }
+
+    protected static function safeJsonString($fieldValue)
+    {
         return str_replace(
             ["'"],
             ["''"],
@@ -45,26 +51,27 @@ class Common
 
     protected static function is_json($str): bool
     {
-        if (!is_string($str)){
+        if (!is_string($str)) {
             return false;
         }
         return json_decode($str, true) !== null;
     }
 
-    protected static function safeJson($jsonData,$asArray = false){
-        $jsonData = json_decode($jsonData,true);
+    protected static function safeJson($jsonData, $asArray = false)
+    {
+        $jsonData = json_decode($jsonData, true);
         $safeJsonData = [];
-        if (!is_array($jsonData)){
+        if (!is_array($jsonData)) {
             return $jsonData;
         }
-        foreach ($jsonData as $key => $value){
-            if (self::is_json($value)){
-                $safeJsonData[$key] = self::safeJson($value,true);
-            }elseif(is_string($value)){
+        foreach ($jsonData as $key => $value) {
+            if (self::is_json($value)) {
+                $safeJsonData[$key] = self::safeJson($value, true);
+            } elseif (is_string($value)) {
                 $safeJsonData[$key] = self::safeJsonString($value);
-            }elseif(is_array($value)){
-                $safeJsonData[$key] = self::safeJson(json_encode($value),true);
-            }else{
+            } elseif (is_array($value)) {
+                $safeJsonData[$key] = self::safeJson(json_encode($value), true);
+            } else {
                 $safeJsonData[$key] = $value;
             }
         }

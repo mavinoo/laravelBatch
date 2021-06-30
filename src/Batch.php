@@ -103,7 +103,7 @@ class Batch implements BatchInterface
                         $value = (is_null($val[$field]) ? 'NULL' : $finalField);
                     }
 
-                    if ($driver == 'pgsql')
+                    if (Common::disableBacktick($driver))
                         $final[$field][] = 'WHEN ' . $index . ' = \'' . $val[$index] . '\' THEN ' . $value . ' ';
                     else
                         $final[$field][] = 'WHEN `' . $index . '` = \'' . $val[$index] . '\' THEN ' . $value . ' ';
@@ -111,7 +111,7 @@ class Batch implements BatchInterface
             }
         }
 
-        if ($driver == 'pgsql') {
+        if (Common::disableBacktick($driver)) {
 
             $cases = '';
             foreach ($final as $k => $v) {
@@ -189,10 +189,9 @@ class Batch implements BatchInterface
                     $finalField = $raw ? Common::mysql_escape($val[$field]) : "'" . Common::mysql_escape($val[$field]) . "'";
                     $value = (is_null($val[$field]) ? 'NULL' : $finalField);
 
-                    if ($driver == 'pgsql') {
+                    if (Common::disableBacktick($driver)) {
                         $final[$field][] = 'WHEN (' . $index . ' = \'' . Common::mysql_escape($val[$index]) . '\' AND ' . $index2 . ' = \'' . $val[$index2] . '\') THEN ' . $value . ' ';
-                    }
-                    else {
+                    } else {
                         $final[$field][] = 'WHEN (`' . $index . '` = "' . Common::mysql_escape($val[$index]) . '" AND `' . $index2 . '` = "' . $val[$index2] . '") THEN ' . $value . ' ';
                     }
                 }
@@ -200,7 +199,7 @@ class Batch implements BatchInterface
         }
 
 
-        if ($driver == 'pgsql') {
+        if (Common::disableBacktick($driver)) {
             $cases = '';
             foreach ($final as $k => $v) {
                 $cases .= '"' . $k . '" = (CASE ' . implode("\n", $v) . "\n"
@@ -209,8 +208,7 @@ class Batch implements BatchInterface
 
             $query = "UPDATE \"" . $this->getFullTableName($table) . '" SET ' . substr($cases, 0, -2) . " WHERE \"$index\" IN('" . implode("','", $ids) . "') AND \"$index2\" IN('" . implode("','", $ids2) . "');";
             //$query = "UPDATE \"" . $this->getFullTableName($table) . "\" SET " . substr($cases, 0, -2) . " WHERE \"$index\" IN(" . '"' . implode('","', $ids) . '")' . " AND \"$index2\" IN(" . '"' . implode('","', $ids2) . '"' . " );";
-        }
-        else {
+        } else {
             $cases = '';
             foreach ($final as $k => $v) {
                 $cases .= '`' . $k . '` = (CASE ' . implode("\n", $v) . "\n"
