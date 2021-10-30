@@ -316,8 +316,17 @@ class Batch implements BatchInterface
             }
         }
 
-        foreach ($columns as $key => $column) {
-            $columns[$key] = '`' . Common::mysql_escape($column) . '`';
+        $connection = config('database.default');
+        $driver = config("database.connections.{$connection}.driver");
+
+        if (Common::disableBacktick($driver)) {
+            foreach ($columns as $key => $column) {
+                $columns[$key] = '"' . Common::mysql_escape($column) . '"';
+            }
+        } else {
+            foreach ($columns as $key => $column) {
+                $columns[$key] = '`' . Common::mysql_escape($column) . '`';
+            }
         }
 
         foreach ($values as $value) {
@@ -335,7 +344,11 @@ class Batch implements BatchInterface
 
             $ignoreStmt = $insertIgnore ? ' IGNORE ' : '';
 
-            $query[] = 'INSERT ' . $ignoreStmt . ' INTO `' . $this->getFullTableName($table) . '` (' . implode(',', $columns) . ") VALUES $valueString;";
+            if (Common::disableBacktick($driver)) {
+                $query[] = 'INSERT ' . $ignoreStmt . ' INTO "' . $this->getFullTableName($table) . '" (' . implode(',', $columns) . ") VALUES $valueString;";
+            } else {
+                $query[] = 'INSERT ' . $ignoreStmt . ' INTO `' . $this->getFullTableName($table) . '` (' . implode(',', $columns) . ") VALUES $valueString;";
+            }
         }
 
         if (count($query)) {
