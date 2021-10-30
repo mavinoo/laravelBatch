@@ -81,7 +81,7 @@ class Common
                 $safeJsonData[$key] = $value;
             }
         }
-        return $asArray ? $safeJsonData : json_encode($safeJsonData);
+        return $asArray ? $safeJsonData : json_encode($safeJsonData, JSON_UNESCAPED_UNICODE);
     }
 
 }
