@@ -60,7 +60,8 @@ class Common
         if (!is_string($str)) {
             return false;
         }
-        return json_decode($str, true) !== null;
+        $json = json_decode($str);
+        return $json && $str != $json;
     }
 
     protected static function safeJson($jsonData, $asArray = false)
