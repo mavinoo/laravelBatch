@@ -57,7 +57,7 @@ class Common
 
     protected static function is_json($str): bool
     {
-        if (!is_string($str)) {
+        if (!is_string($str)  || is_numeric($str)) {
             return false;
         }
         $json = json_decode($str);
