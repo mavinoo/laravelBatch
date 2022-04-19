@@ -271,7 +271,7 @@ class Batch implements BatchInterface
     {
         // no need for the old validation since we now use type hint that supports from php 7.0
         // but I kept this one
-        if (count($columns) !== count($values[0])) {
+        if (count($columns) !== count(current($values)) {
             return false;
         }
 
