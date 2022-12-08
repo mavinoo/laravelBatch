@@ -96,7 +96,11 @@ class Batch implements BatchInterface
                             throw new \TypeError('Second value in Increment/Decrement array needs to be numeric');
                         }
                         // Increment / decrement
-                        $value = '`' . $field . '`' . $val[$field][0] . $val[$field][1];
+                        if (Common::disableBacktick($driver)) {
+                            $value = $field . $val[$field][0] . $val[$field][1];
+                        } else {
+                            $value = '`' . $field . '`' . $val[$field][0] . $val[$field][1];
+                        }
                     } else {
                         // Only update
                         $finalField = $raw ? Common::mysql_escape($val[$field]) : "'" . Common::mysql_escape($val[$field]) . "'";
