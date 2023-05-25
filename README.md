@@ -161,7 +161,32 @@ Array
 )
 ```
 
+# Example called from model
 
+Add `HasBatch` trait into model:
+
+```php
+namespace App\Models;
+
+use Mavinoo\Batch\Traits\HasBatch;
+
+class User extends Model
+{
+    use HasBatch;
+}
+```
+
+And call `batchUpdate()` or `batchInsert()` from model:
+
+```php
+use App\Models\User;
+
+// ex: update
+User::batchUpdate($value, $index);
+
+// ex: insert
+User::batchInsert($columns, $values, $batchSize);
+```
 
 # Helper batch()
 
