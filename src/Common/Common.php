@@ -66,11 +66,18 @@ class Common
 
     protected static function safeJson($jsonData, $asArray = false)
     {
+        if ($jsonData === '{}') {
+            return $asArray ? [] : '{}';
+        }
+
         $jsonData = json_decode($jsonData, true);
-        $safeJsonData = [];
+
         if (!is_array($jsonData)) {
             return $jsonData;
         }
+
+        $safeJsonData = [];
+
         foreach ($jsonData as $key => $value) {
             if (self::is_json($value)) {
                 $safeJsonData[$key] = self::safeJson($value, true);
@@ -82,6 +89,7 @@ class Common
                 $safeJsonData[$key] = $value;
             }
         }
+
         return $asArray ? $safeJsonData : json_encode($safeJsonData, JSON_UNESCAPED_UNICODE);
     }
 
