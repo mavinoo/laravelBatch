@@ -1,5 +1,5 @@
 {
-    "name": "zp/laravel-batch",
+    "name": "cxy/laravel-batch",
     "description": "Insert and update batch (bulk) in laravel",
     "type": "library",
     "license": "MIT",
