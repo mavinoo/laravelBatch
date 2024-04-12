@@ -295,12 +295,12 @@ class Batch implements BatchInterface
             $addCreatedAtValue = false;
             $addUpdatedAtValue = false;
 
-            if (!in_array($createdAtColumn, $columns)) {
+            if ($createdAtColumn && !in_array($createdAtColumn, $columns)) {
                 $addCreatedAtValue = true;
                 array_push($columns, $createdAtColumn);
             }
 
-            if (!in_array($updatedAtColumn, $columns)) {
+            if ($updatedAtColumn && !in_array($updatedAtColumn, $columns)) {
                 $addUpdatedAtValue = true;
                 array_push($columns, $updatedAtColumn);
             }
