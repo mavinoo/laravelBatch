@@ -73,7 +73,7 @@ class Batch implements BatchInterface
             if ($table->usesTimestamps()) {
                 $updatedAtColumn = $table->getUpdatedAtColumn();
 
-                if (!isset($val[$updatedAtColumn])) {
+                if ($updatedAtColumn && !isset($val[$updatedAtColumn])) {
                     $val[$updatedAtColumn] = Carbon::now()->format($table->getDateFormat());
                 }
             }
