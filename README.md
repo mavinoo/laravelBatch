@@ -207,6 +207,4 @@ If you don't have phpunit installed on your project, first run `composer require
 In the root of your laravel app, run `./vendor/bin/phpunit ./vendor/mavinoo/laravel-batch/tests`
 
 # Donate 
-BTC Address: 14XQEuVKuZp8q59h3Jk9Q2wi45368aEbyG
-
-DOGE Address: DMsFurgSP2LTny8wkco3cE3ZhgQrFAJLp8
+USDT Address: 0x98410956169cdd00a43fe895303bdca096f37062
