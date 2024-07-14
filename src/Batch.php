@@ -50,6 +50,7 @@ class Batch implements BatchInterface
      * @param string $index
      * @param bool $raw
      * @return bool|int
+     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
      * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
      */
     public function update(Model $table, array $values, string $index = null, bool $raw = false)
@@ -119,7 +120,7 @@ class Batch implements BatchInterface
             $cases = '';
             foreach ($final as $k => $v) {
                 $cases .= '"' . $k . '" = (CASE ' . implode("\n", $v) . "\n"
-                    . 'ELSE "' . $k . '" END), ';
+                        . 'ELSE "' . $k . '" END), ';
             }
 
             $query = "UPDATE \"" . $this->getFullTableName($table) . '" SET ' . substr($cases, 0, -2) . " WHERE \"$index\" IN('" . implode("','", $ids) . "');";
@@ -129,13 +130,12 @@ class Batch implements BatchInterface
             $cases = '';
             foreach ($final as $k => $v) {
                 $cases .= '`' . $k . '` = (CASE ' . implode("\n", $v) . "\n"
-                    . 'ELSE `' . $k . '` END), ';
+                        . 'ELSE `' . $k . '` END), ';
             }
 
             $query = "UPDATE `" . $this->getFullTableName($table) . "` SET " . substr($cases, 0, -2) . " WHERE `$index` IN(" . '"' . implode('","', $ids) . '"' . ");";
 
         }
-
 
         return $this->db->connection($this->getConnectionName($table))->update($query);
     }
@@ -148,6 +148,7 @@ class Batch implements BatchInterface
      * @param string|null $index2
      * @param bool $raw
      * @return bool|int
+     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
      * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
      *
      * @desc
@@ -205,7 +206,7 @@ class Batch implements BatchInterface
             $cases = '';
             foreach ($final as $k => $v) {
                 $cases .= '"' . $k . '" = (CASE ' . implode("\n", $v) . "\n"
-                    . 'ELSE "' . $k . '" END), ';
+                        . 'ELSE "' . $k . '" END), ';
             }
 
             $query = "UPDATE \"" . $this->getFullTableName($table) . '" SET ' . substr($cases, 0, -2) . " WHERE \"$index\" IN('" . implode("','", $ids) . "') AND \"$index2\" IN('" . implode("','", $ids2) . "');";
@@ -214,12 +215,133 @@ class Batch implements BatchInterface
             $cases = '';
             foreach ($final as $k => $v) {
                 $cases .= '`' . $k . '` = (CASE ' . implode("\n", $v) . "\n"
-                    . 'ELSE `' . $k . '` END), ';
+                        . 'ELSE `' . $k . '` END), ';
             }
             $query = "UPDATE `" . $this->getFullTableName($table) . "` SET " . substr($cases, 0, -2) . " WHERE `$index` IN(" . '"' . implode('","', $ids) . '")' . " AND `$index2` IN(" . '"' . implode('","', $ids2) . '"' . " );";
         }
 
         return $this->db->connection($this->getConnectionName($table))->update($query);
+    }
+
+    /**
+     * Update multiple condition rows
+     * @param Model $table
+     * @param array $arrays
+     * @param string $keyName
+     * @param bool $raw
+     * @return bool|int
+     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
+     *
+     * @desc
+     * Example
+     * $table = new \App\Models\User;
+     * $arrays = [
+     *      [
+     *          'conditions' => ['id' => 1, 'status' => 'active'],
+     *          'columns'    => [
+     *              'status' => 'invalid'
+     *              'nickname' => 'mohammad'
+     *          ],
+     *      ],
+     *      [
+     *          'conditions' => ['id' => 2],
+     *          'columns'    => [
+     *              'nickname' => 'mavinoo',
+     *              'name' => 'mohammad',
+     *          ],
+     *      ],
+     *      [
+     *          'conditions' => ['id' => 3],
+     *          'columns'    => [
+     *              'nickname' => 'ali'
+     *          ],
+     *      ],
+     * ];
+     * $keyName = 'id';
+     *
+     */
+    public function updateMultipleCondition(Model $table, array $arrays, string $keyName = null, bool $raw = false)
+    {
+        $driver = $table->getConnection()->getDriverName();
+        $connectionName = $this->getConnectionName($table);
+        $tableName = $this->getFullTableName($table);
+        $timestamp = $table->usesTimestamps();
+        $backtick = Common::disableBacktick($driver) ? '`' : '';
+
+        if (!count($arrays)) {
+            return false;
+        }
+
+        if (!isset($keyName) || empty($keyName)) {
+            $keyName = $table->getKeyName();
+        }
+
+        $columns = [];
+        $conditionMaster = [];
+        foreach ($arrays as $array) {
+            foreach ($array['conditions'] as $keyCondition => $condition) {
+                if ($keyName == $keyCondition and !in_array($condition, $conditionMaster)) {
+                    $conditionMaster[] = str(Common::mysql_escape($condition))->toString();
+                }
+            }
+            foreach ($array as $key => $item) {
+                if ($key == 'columns') {
+                    foreach ($item as $k => $value) {
+                        if (!in_array($key, $columns)) {
+                            $columns[$k] = $k;
+                        }
+                    }
+                }
+            }
+        }
+
+        $arraysNew = [];
+        $keys = array_keys($columns);
+        foreach ($keys as $key) {
+            $arraysMixed = collect($arrays)->filter(function ($rows) use ($key) {
+                return in_array($key, array_keys($rows['columns']));
+            });
+
+            foreach ($arraysMixed as $item) {
+                $value = $raw ? Common::mysql_escape($item['columns'][$key]) : "'" . Common::mysql_escape($item['columns'][$key]) . "'";
+                $arraysNew[$key][] = [
+                        'conditions' => $item['conditions'],
+                        'value'      => is_null($item['columns'][$key]) ? "NULL" : $value,
+                ];
+
+                if ($timestamp) {
+                    $arraysNew['updated_at'][] = [
+                            'conditions' => $item['conditions'],
+                            'value'      => "'".(now())."'",
+                    ];
+                }
+            }
+        }
+
+        $cases = [];
+        foreach ($arraysNew as $key => $items) {
+            $caseSql = "{$backtick}{$key}{$backtick} = (CASE ";
+            foreach ($items as $item) {
+                $conditions = $item['conditions'];
+                $value = $item['value'];
+
+                $conditionContext = [];
+                foreach ($conditions as $conditionKey => $condition) {
+                    $conditionContext[] = " {$backtick}{$conditionKey}{$backtick} = '{$condition}' ";
+                }
+
+                $conditionContext = join(' and ', $conditionContext);
+                $caseSql .= " WHEN $conditionContext THEN {$value} ";
+            }
+            $caseSql .= " ELSE {$backtick}{$key}{$backtick} END)";
+            $cases[] = $caseSql;
+        }
+        $caseSql = join(', ', $cases);
+        $conditionMaster = join(', ', $conditionMaster);
+
+        $query = "update {$backtick}{$tableName}{$backtick} set {$caseSql} where {$backtick}{$keyName}{$backtick} in ({$conditionMaster})";
+
+        return $this->db->connection($connectionName)->update($query);
     }
 
     /**
@@ -232,6 +354,7 @@ class Batch implements BatchInterface
      * @param bool $insertIgnore
      * @return bool|mixed
      * @throws \Throwable
+     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
      * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
      * @desc
      * Example
@@ -360,9 +483,9 @@ class Batch implements BatchInterface
                 }
 
                 return [
-                    'totalRows' => $totalValues,
-                    'totalBatch' => $totalChunk,
-                    'totalQuery' => $totalQuery
+                        'totalRows' => $totalValues,
+                        'totalBatch' => $totalChunk,
+                        'totalQuery' => $totalQuery
                 ];
             });
         }

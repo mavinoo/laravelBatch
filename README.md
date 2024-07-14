@@ -1,4 +1,5 @@
 # Laravel BATCH (BULK)
+
 Insert and update batch (bulk) in laravel
 
 [![License](https://poser.pugx.org/mavinoo/laravel-batch/license)](https://packagist.org/packages/mavinoo/laravel-batch)
@@ -6,21 +7,58 @@ Insert and update batch (bulk) in laravel
 [![Total Downloads](https://poser.pugx.org/mavinoo/laravel-batch/downloads)](https://packagist.org/packages/mavinoo/laravel-batch)
 [![Daily Downloads](https://poser.pugx.org/mavinoo/laravel-batch/d/daily)](https://packagist.org/packages/mavinoo/laravel-batch)
 
-
 # Install
+
 `composer require mavinoo/laravel-batch`
 
 # Service Provider
+
 file app.php in array providers :
 
 `Mavinoo\Batch\BatchServiceProvider::class,`
 
 # Aliases
+
 file app.php in array aliases :
 
 `'Batch' => Mavinoo\Batch\BatchFacade::class,`
 
-# Example Update 1
+# Example Update Multiple Condition
+
+```php
+use App\Models\User;
+
+$userInstance = new User;
+$arrays = [
+     [
+         'conditions' => ['id' => 1, 'status' => 'active'],
+         'columns'    => [
+             'status' => 'invalid'
+             'nickname' => 'mohammad'
+         ],
+     ],
+     [
+         'conditions' => ['id' => 2],
+         'columns'    => [
+             'nickname' => 'mavinoo',
+             'name' => 'mohammad',
+         ],
+     ],
+     [
+         'conditions' => ['id' => 3],
+         'columns'    => [
+             'nickname' => 'ali'
+         ],
+     ],
+];
+$keyName = 'id';
+
+Batch::updateMultipleCondition($userInstance, $arrays, $keyName);
+or
+batch()->updateMultipleCondition($userInstance, $arrays, $keyName);
+```
+
+# Example Update 2
 
 ```php
 use App\Models\User;
@@ -41,9 +79,11 @@ $value = [
 $index = 'id';
 
 Batch::update($userInstance, $value, $index);
+or
+batch()->update($userInstance, $values, $index);
 ```
 
-# Example Update 2
+# Example Update 3
 
 ```php
 use App\Models\User;
@@ -72,6 +112,8 @@ $value = [
 $index = 'id';
 
 Batch::update($userInstance, $value, $index);
+or
+batch()->update($userInstance, $values, $index);
 ```
 
 # Example Increment / Decrement
@@ -105,6 +147,8 @@ $value = [
 $index = 'id';
 
 Batch::update($userInstance, $value, $index);
+or
+batch()->update($userInstance, $values, $index);
 ```
 
 # Example Insert
@@ -146,8 +190,9 @@ $values = [
 $batchSize = 500; // insert 500 (default), 100 minimum rows in one query
 
 $result = Batch::insert($userInstance, $columns, $values, $batchSize);
+or
+$result = batch()->insert($userInstance, $values, $index);
 ```
-
 
 ```php
 // result : false or array
@@ -202,9 +247,11 @@ $result = batch()->insert($userInstance, $columns, $values, $batchSize);
 ```
 
 # Tests
+
 If you don't have phpunit installed on your project, first run `composer require phpunit/phpunit`
 
 In the root of your laravel app, run `./vendor/bin/phpunit ./vendor/mavinoo/laravel-batch/tests`
 
-# Donate 
+# Donate
+
 USDT Address: 0x98410956169cdd00a43fe895303bdca096f37062

@@ -30,6 +30,17 @@ interface BatchInterface
     public function updateWithTwoIndex(Model $table, array $values, string $index = null, string $index2 = null, bool $raw = false);
 
     /**
+     * Update multiple condition rows.
+     *
+     * @param Model $table
+     * @param array $values
+     * @param string|null $index
+     * @param bool $raw
+     * @return mixed
+     */
+    public function updateMultipleCondition(Model $table, array $values, string $index = null, bool $raw = false);
+
+    /**
      * Insert multiple rows.
      *
      * @param Model $table
