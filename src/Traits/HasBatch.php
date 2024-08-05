@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Mavinoo\Batch\Traits;
 
@@ -36,11 +38,54 @@ trait HasBatch
      * @param  array  $values
      * @param  string|null  $index
      * @param  bool  $raw
+     *
      * @return bool|int
      */
     public static function batchUpdate(array $values, string $index = null, bool $raw = false)
     {
         return app(Batch::class)->update(new static, $values, $index, $raw);
+    }
+
+    /**
+     * Update multiple condition rows
+     *
+     * @param  array  $arrays
+     * @param  string|null  $keyName
+     * @param  bool  $raw
+     *
+     * @return bool|int
+     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
+     *
+     * @desc
+     * Example
+     * $table = new \App\Models\User;
+     * $arrays = [
+     *      [
+     *          'conditions' => ['id' => 1, 'status' => 'active'],
+     *          'columns'    => [
+     *              'status' => 'invalid'
+     *              'nickname' => 'mohammad'
+     *          ],
+     *      ],
+     *      [
+     *          'conditions' => ['id' => 2],
+     *          'columns'    => [
+     *              'nickname' => 'mavinoo',
+     *              'name' => 'mohammad',
+     *          ],
+     *      ],
+     *      [
+     *          'conditions' => ['id' => 3],
+     *          'columns'    => [
+     *              'nickname' => 'ali'
+     *          ],
+     *      ],
+     * ];
+     * $keyName = 'id';
+     */
+    public function updateMultipleCondition(array $arrays, string $keyName = null, bool $raw = false)
+    {
+        return app(Batch::class)->updateMultipleCondition(new static, $arrays, $keyName, $raw);
     }
 
     /**
@@ -89,6 +134,7 @@ trait HasBatch
      * @param  array  $values
      * @param  int  $batchSize
      * @param  bool  $insertIgnore
+     *
      * @return bool|array
      */
     public static function batchInsert(array $columns, array $values, int $batchSize = 500, bool $insertIgnore = false)

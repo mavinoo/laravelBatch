@@ -45,7 +45,7 @@ class Batch implements BatchInterface
      * Batch::update($userInstance, $value, $index);
      * ```
      *
-     * @param \Illuminate\Database\Eloquent\Model $table
+     * @param Model $table
      * @param array $values
      * @param string $index
      * @param bool $raw
@@ -225,10 +225,12 @@ class Batch implements BatchInterface
 
     /**
      * Update multiple condition rows
-     * @param Model $table
-     * @param array $arrays
-     * @param string $keyName
-     * @param bool $raw
+     *
+     * @param  Model  $table
+     * @param  array  $arrays
+     * @param  string|null  $keyName
+     * @param  bool  $raw
+     *
      * @return bool|int
      * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
      *
@@ -258,7 +260,6 @@ class Batch implements BatchInterface
      *      ],
      * ];
      * $keyName = 'id';
-     *
      */
     public function updateMultipleCondition(Model $table, array $arrays, string $keyName = null, bool $raw = false)
     {
