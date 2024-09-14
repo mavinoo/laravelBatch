@@ -13,13 +13,13 @@ Insert and update batch (bulk) in laravel
 
 # Service Provider
 
-file app.php in array providers :
+File `app.php` in array providers:
 
 `Mavinoo\Batch\BatchServiceProvider::class,`
 
 # Aliases
 
-file app.php in array aliases :
+File `app.php` in array aliases:
 
 `'Batch' => Mavinoo\Batch\BatchFacade::class,`
 
@@ -30,31 +30,31 @@ use App\Models\User;
 
 $userInstance = new User;
 $arrays = [
-     [
-         'conditions' => ['id' => 1, 'status' => 'active'],
-         'columns'    => [
-             'status' => 'invalid'
-             'nickname' => 'mohammad'
-         ],
-     ],
-     [
-         'conditions' => ['id' => 2],
-         'columns'    => [
-             'nickname' => 'mavinoo',
-             'name' => 'mohammad',
-         ],
-     ],
-     [
-         'conditions' => ['id' => 3],
-         'columns'    => [
-             'nickname' => 'ali'
-         ],
-     ],
+    [
+        'conditions' => ['id' => 1, 'status' => 'active'],
+        'columns'    => [
+            'status' => 'invalid',
+            'nickname' => 'mohammad',
+        ],
+    ],
+    [
+        'conditions' => ['id' => 2],
+        'columns'    => [
+            'nickname' => 'mavinoo',
+            'name' => 'mohammad',
+        ],
+    ],
+    [
+        'conditions' => ['id' => 3],
+        'columns'    => [
+            'nickname' => 'ali',
+        ],
+    ],
 ];
 $keyName = 'id';
 
 Batch::updateMultipleCondition($userInstance, $arrays, $keyName);
-or
+// or
 batch()->updateMultipleCondition($userInstance, $arrays, $keyName);
 ```
 
@@ -65,21 +65,21 @@ use App\Models\User;
 
 $userInstance = new User;
 $value = [
-     [
-         'id' => 1,
-         'status' => 'active',
-         'nickname' => 'Mohammad'
-     ] ,
-     [
-         'id' => 5,
-         'status' => 'deactive',
-         'nickname' => 'Ghanbari'
-     ] ,
+    [
+        'id' => 1,
+        'status' => 'active',
+        'nickname' => 'Mohammad',
+    ],
+    [
+        'id' => 5,
+        'status' => 'deactive',
+        'nickname' => 'Ghanbari',
+    ],
 ];
 $index = 'id';
 
 Batch::update($userInstance, $value, $index);
-or
+// or
 batch()->update($userInstance, $values, $index);
 ```
 
@@ -90,29 +90,29 @@ use App\Models\User;
 
 $userInstance = new User;
 $value = [
-     [
-         'id' => 1,
-         'status' => 'active'
-     ],
-     [
-         'id' => 5,
-         'status' => 'deactive',
-         'nickname' => 'Ghanbari'
-     ],
-     [
-         'id' => 10,
-         'status' => 'active',
-         'date' => Carbon::now()
-     ],
-     [
-         'id' => 11,
-         'username' => 'mavinoo'
-     ]
+    [
+        'id' => 1,
+        'status' => 'active',
+    ],
+    [
+        'id' => 5,
+        'status' => 'deactive',
+        'nickname' => 'Ghanbari',
+    ],
+    [
+        'id' => 10,
+        'status' => 'active',
+        'date' => Carbon::now(),
+    ],
+    [
+        'id' => 11,
+        'username' => 'mavinoo',
+    ],
 ];
 $index = 'id';
 
 Batch::update($userInstance, $value, $index);
-or
+// or
 batch()->update($userInstance, $values, $index);
 ```
 
@@ -123,31 +123,31 @@ use App\Models\User;
 
 $userInstance = new User;
 $value = [
-     [
-         'id' => 1,
-         'balance' => ['+', 500] // Add
-     ] ,
-     [
-         'id' => 2,
-         'balance' => ['-', 200] // Subtract
-     ] ,
-     [
-         'id' => 3,
-         'balance' => ['*', 5] // Multiply
-     ] ,
-     [
-         'id' => 4,
-         'balance' => ['/', 2] // Divide
-     ] ,
-     [
-         'id' => 5,
-         'balance' => ['%', 2] // Modulo
-     ] ,
+    [
+        'id' => 1,
+        'balance' => ['+', 500], // Add
+    ],
+    [
+        'id' => 2,
+        'balance' => ['-', 200], // Subtract
+    ],
+    [
+        'id' => 3,
+        'balance' => ['*', 5], // Multiply
+    ],
+    [
+        'id' => 4,
+        'balance' => ['/', 2], // Divide
+    ],
+    [
+        'id' => 5,
+        'balance' => ['%', 2], // Modulo
+    ],
 ];
 $index = 'id';
 
 Batch::update($userInstance, $value, $index);
-or
+// or
 batch()->update($userInstance, $values, $index);
 ```
 
@@ -158,44 +158,44 @@ use App\Models\User;
 
 $userInstance = new User;
 $columns = [
-     'firstName',
-     'lastName',
-     'email',
-     'isActive',
-     'status',
+    'firstName',
+    'lastName',
+    'email',
+    'isActive',
+    'status',
 ];
 $values = [
-     [
-         'Mohammad',
-         'Ghanbari',
-         'emailSample_1@gmail.com',
-         '1',
-         '0',
-     ] ,
-     [
-         'Saeed',
-         'Mohammadi',
-         'emailSample_2@gmail.com',
-         '1',
-         '0',
-     ] ,
-     [
-         'Avin',
-         'Ghanbari',
-         'emailSample_3@gmail.com',
-         '1',
-         '0',
-     ] ,
+    [
+        'Mohammad',
+        'Ghanbari',
+        'emailSample_1@gmail.com',
+        '1',
+        '0',
+    ],
+    [
+        'Saeed',
+        'Mohammadi',
+        'emailSample_2@gmail.com',
+        '1',
+        '0',
+    ],
+    [
+        'Avin',
+        'Ghanbari',
+        'emailSample_3@gmail.com',
+        '1',
+        '0',
+    ],
 ];
 $batchSize = 500; // insert 500 (default), 100 minimum rows in one query
 
 $result = Batch::insert($userInstance, $columns, $values, $batchSize);
-or
+// or
 $result = batch()->insert($userInstance, $values, $index);
 ```
 
 ```php
-// result : false or array
+// result: false or array
 
 sample array result:
 Array
@@ -237,12 +237,10 @@ User::batchInsert($columns, $values, $batchSize);
 
 ```php
 // ex: update
-
 $result = batch()->update($userInstance, $value, $index);
 
 
 // ex: insert
-
 $result = batch()->insert($userInstance, $columns, $values, $batchSize);
 ```
 
