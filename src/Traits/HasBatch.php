@@ -41,7 +41,7 @@ trait HasBatch
      *
      * @return bool|int
      */
-    public static function batchUpdate(array $values, string $index = null, bool $raw = false)
+    public static function batchUpdate(array $values, string|null $index = null, bool $raw = false)
     {
         return app(Batch::class)->update(new static, $values, $index, $raw);
     }
@@ -83,7 +83,7 @@ trait HasBatch
      * ];
      * $keyName = 'id';
      */
-    public function updateMultipleCondition(array $arrays, string $keyName = null, bool $raw = false)
+    public function updateMultipleCondition(array $arrays, string|null $keyName = null, bool $raw = false)
     {
         return app(Batch::class)->updateMultipleCondition(new static, $arrays, $keyName, $raw);
     }
