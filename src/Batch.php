@@ -188,7 +188,8 @@ class Batch implements BatchInterface
             $ids[] = $val[$index];
             $ids2[] = $val[$index2];
             foreach (array_keys($val) as $field) {
-                if ($field !== $index || $field !== $index2) {
+                // FIX: use AND so we skip fields that equal index OR index2
+            if ($field !== $index && $field !== $index2) {
                     $finalField = $raw ? Common::mysql_escape($val[$field]) : "'" . Common::mysql_escape($val[$field]) . "'";
                     $value = (is_null($val[$field]) ? 'NULL' : $finalField);
 
