@@ -1,8 +1,8 @@
 <?php declare(strict_types=1);
 
-namespace Mavinoo\Batch;
+namespace Packages\laravelBatchMaster;
 
-use Mavinoo\Batch\Common\Common;
+use Packages\laravelBatchMaster\Common\Common;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Carbon;
@@ -188,10 +188,8 @@ class Batch implements BatchInterface
             $ids[] = $val[$index];
             $ids2[] = $val[$index2];
             foreach (array_keys($val) as $field) {
-                // FIX: use AND so we skip fields that equal index OR index2
-            if ($field !== $index && $field !== $index2) {
-                    $finalField = $raw ? Common::mysql_escape($val[$field]) : "'" . Common::mysql_escape($val[$field]) . "'";
-                    $value = (is_null($val[$field]) ? 'NULL' : $finalField);
+                if ($field !== $index && $field !== $index2) {
+                    $value = $this->formatSqlValue($val[$field], $raw);
 
                     if (Common::disableBacktick($driver)) {
                         $final[$field][] = 'WHEN (' . $index . ' = \'' . Common::mysql_escape($val[$index]) . '\' AND ' . $index2 . ' = \'' . $val[$index2] . '\') THEN ' . $value . ' ';
@@ -224,6 +222,28 @@ class Batch implements BatchInterface
         return $this->db->connection($this->getConnectionName($table))->update($query);
     }
 
+    private function formatSqlValue($value, bool $raw): string
+    {
+        // NULL
+        if ($value === null) {
+            return 'NULL';
+        }
+
+        // Numbers
+        if (is_int($value) || is_float($value) || is_numeric($value)) {
+            return (string) $value;
+        }
+
+        // Raw SQL detection (BEFORE escaping)
+        if ($raw && is_string($value)) {
+            if (preg_match('/^\s*(CASE|NOW\(|IF\(|COALESCE\(|NULLIF\(|CONCAT\(|IFNULL\(|CURRENT_)/i', $value)) {
+                return $value;
+            }
+        }
+
+        // Escape only string literals
+        return '"' . Common::mysql_escape((string) $value) . '"';
+    }
     /**
      * Update multiple condition rows
      *
