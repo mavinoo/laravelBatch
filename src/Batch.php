@@ -280,7 +280,7 @@ class Batch implements BatchInterface
                     } else {
                         // Only update
                         $finalField = $raw ? Common::mysql_escape($val[$field]) : "'" . Common::mysql_escape($val[$field]) . "'";
-                        $value = (is_null($val[$field]) ? 'NULL' : $finalField);
+                        $value = $this->formatSqlValue($val[$field], $raw);
                         
                         // Build condition to check if value actually changes
                         if (is_null($val[$field])) {
@@ -356,6 +356,29 @@ class Batch implements BatchInterface
         }
 
         return $this->db->connection($this->getConnectionName($table))->update($query);
+    }
+
+    private function formatSqlValue($value, bool $raw): string
+    {
+        // NULL
+        if ($value === null) {
+            return 'NULL';
+        }
+
+        // Numbers
+        if (is_int($value) || is_float($value) || is_numeric($value)) {
+            return (string) $value;
+        }
+
+        // Raw SQL detection (BEFORE escaping)
+        if ($raw && is_string($value)) {
+            if (preg_match('/^\s*(CASE|NOW\(|IF\(|COALESCE\(|NULLIF\(|CONCAT\(|IFNULL\(|CURRENT_)/i', $value)) {
+                return $value;
+            }
+        }
+
+        // Escape only string literals
+        return '"' . Common::mysql_escape((string) $value) . '"';
     }
 
     /**
