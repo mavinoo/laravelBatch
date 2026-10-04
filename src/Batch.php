@@ -216,7 +216,7 @@ class Batch implements BatchInterface
                 ));
             }
 
-            $rows[] = array_combine($columns, array_values($row));
+            $rows[] = array_combine($columns, array_map([$this, 'enumValue'], array_values($row)));
         }
 
         if ($table->usesTimestamps()) {
@@ -533,14 +533,23 @@ class Batch implements BatchInterface
             return [(string) $grammar->getValue($value), []];
         }
 
-        // Enums are stored by value, like Eloquent and the query builder do.
+        return ['?', [$this->enumValue($value)]];
+    }
+
+    /**
+     * Store backed enums by value and other enums by name, on every Laravel version.
+     */
+    private function enumValue($value)
+    {
         if ($value instanceof \BackedEnum) {
-            $value = $value->value;
-        } elseif ($value instanceof \UnitEnum) {
-            $value = $value->name;
+            return $value->value;
         }
 
-        return ['?', [$value]];
+        if ($value instanceof \UnitEnum) {
+            return $value->name;
+        }
+
+        return $value;
     }
 
     /**

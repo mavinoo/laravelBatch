@@ -27,7 +27,7 @@ jobs:
           - { php: '8.5', laravel: '13', testbench: '^11.0' }
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: shivammathur/setup-php@v2
         with:
@@ -78,7 +78,7 @@ jobs:
         options: --health-cmd=pg_isready --health-interval=5s --health-timeout=5s --health-retries=20
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: shivammathur/setup-php@v2
         with:
