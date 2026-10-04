@@ -3,7 +3,7 @@
 All notable changes to `mavinoo/laravel-batch` are documented here.
 Older releases are listed on the [GitHub releases page](https://github.com/mavinoo/laravelBatch/releases).
 
-## 3.0.0 - Unreleased
+## 3.0.0 - 2026-10-04
 
 Upgrading from 2.x: see [UPGRADE.md](UPGRADE.md).
 
