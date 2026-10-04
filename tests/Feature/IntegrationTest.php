@@ -17,6 +17,13 @@ class IntegrationTest extends TestCase
         $this->assertInstanceOf(Batch::class, $this->app->make('Batch'));
     }
 
+    public function test_facade_helper_and_container_share_one_instance(): void
+    {
+        $this->assertSame($this->app->make(Batch::class), $this->app->make('Batch'));
+        $this->assertSame($this->app->make(Batch::class), batch());
+        $this->assertSame($this->app->make(Batch::class), BatchFacade::getFacadeRoot());
+    }
+
     public function test_facade_and_alias(): void
     {
         $this->assertInstanceOf(Batch::class, BatchFacade::getFacadeRoot());

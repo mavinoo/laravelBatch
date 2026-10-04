@@ -332,6 +332,18 @@ class UpdateTest extends TestCase
         }
     }
 
+    public function test_update_statements_are_capped_at_one_hundred_rows(): void
+    {
+        $rows = [];
+        for ($i = 1; $i <= 250; $i++) {
+            $rows[] = ['id' => $i, 'name' => "n{$i}"];
+        }
+
+        $queries = $this->batch()->pretend(fn ($batch) => $batch->update(new User, $rows));
+
+        $this->assertCount(3, $queries);
+    }
+
     public function test_a_failing_query_rolls_back_the_whole_batch(): void
     {
         DB::table('users')->delete();

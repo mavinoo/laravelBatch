@@ -1,0 +1,9 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 9
+    paths:
+        - src
+        # The test models use the HasBatch trait, so the trait gets analysed too.
+        - tests/Fixtures

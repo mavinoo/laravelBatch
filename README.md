@@ -87,6 +87,17 @@ Batch::updateWithTwoIndex(new Membership, [
 ], 'user_id', 'team_id');
 ```
 
+## Update with any number of key columns
+
+Rows are matched on every column in the third argument:
+
+```php
+Batch::updateByKeys(new Score, [
+    ['org_id' => 1, 'year' => 2025, 'code' => 'A', 'points' => 10],
+    ['org_id' => 1, 'year' => 2026, 'code' => 'B', 'points' => 20],
+], ['org_id', 'year', 'code']);
+```
+
 ## Update with different conditions per row
 
 Each item has its own `conditions` and `columns`. Every item's conditions must include the
@@ -133,6 +144,67 @@ $result = Batch::insert(new User, ['name', 'email', 'is_active'], [
 - Pass `true` as the fifth argument to skip rows that hit a unique key (`INSERT IGNORE`).
   Not supported on SQL Server.
 
+## Insert rows given as column => value pairs
+
+`insertRows()` takes the same options as `insert()`, but each row names its columns. Every row
+needs the same columns; their order doesn't matter.
+
+```php
+Batch::insertRows(new User, [
+    ['name' => 'Mohammad', 'email' => 'mohammad@example.com'],
+    ['email' => 'saeed@example.com', 'name' => 'Saeed'],
+], 500);
+```
+
+# Delete
+
+Delete rows matched on one or more key columns:
+
+```php
+Batch::deleteByKeys(new Score, [
+    ['org_id' => 1, 'year' => 2025],
+    ['org_id' => 2, 'year' => 2026],
+], ['org_id', 'year']);
+```
+
+Models that use `SoftDeletes` are soft deleted (only `deleted_at`, and `updated_at`, are set).
+Pass `true` as the fourth argument to delete them for real.
+
+# Upsert
+
+Insert rows, or update them when a row with the same `$uniqueBy` values already exists, in one query:
+
+```php
+Batch::upsert(new User, [
+    ['email' => 'ali@example.com', 'name' => 'Ali', 'score' => 90],   // exists: name and score are updated
+    ['email' => 'sara@example.com', 'name' => 'Sara', 'score' => 75], // new: inserted
+], ['email'], ['name', 'score']);
+```
+
+- The third argument lists the columns that identify an existing row. They need a primary or
+  unique index. On MySQL and MariaDB, any unique index decides what counts as an existing row.
+- The fourth argument lists the columns to update on existing rows; leave it out (`null`) to update
+  every given column.
+- `created_at` is only set on new rows and `updated_at` on every row, like Eloquent's `upsert()`.
+- Unlike `Model::upsert()`, large batches are split into several queries automatically, in one
+  transaction.
+- The returned count comes from the database: MySQL and MariaDB count an updated row as 2.
+
+# Preview the SQL without running it
+
+`pretend()` returns the statements Batch would run, with their bindings. Nothing is executed and no
+database connection is opened.
+
+```php
+$queries = Batch::pretend(function ($batch) {
+    $batch->update(new User, [['id' => 1, 'name' => 'Ali']]);
+});
+
+// [['sql' => 'UPDATE `users` SET ... WHERE `id` IN (?)', 'bindings' => [...], 'connection' => 'mysql']]
+```
+
+Calls made inside the callback through the facade, `batch()` or the `HasBatch` trait are recorded too.
+
 # From a model
 
 Add the `HasBatch` trait:
@@ -149,9 +221,17 @@ class User extends Model
 
 ```php
 User::batchUpdate($values, 'id');
+User::batchUpdateWithTwoIndex($values, 'user_id', 'team_id');
+User::batchUpdateByKeys($values, ['org_id', 'year']);
+User::batchUpdateMultipleCondition($items, 'id');
 User::batchInsert($columns, $values, 500);
-(new User)->updateMultipleCondition($items, 'id');
+User::batchInsertRows($rows, 500);
+User::batchUpsert($rows, ['email'], ['name']);
+User::batchDeleteByKeys($rows, ['org_id', 'year']);
 ```
+
+`(new User)->updateMultipleCondition()` still works, but is deprecated in favour of the static
+`User::batchUpdateMultipleCondition()` and will be removed in 4.0.
 
 # Helper
 
@@ -163,7 +243,8 @@ batch()->insert(new User, $columns, $values, 500);
 # Large batches and errors
 
 - Batches that would go over the database's limit on bound parameters are split into several
-  queries automatically. Several queries always run in one transaction on the model's connection,
+  queries automatically, and each `UPDATE` holds at most 100 rows, which benchmarks showed to be the
+  fastest size on every supported database. Several queries always run in one transaction on the model's connection,
   so either every row is written or none is.
 - Invalid input (a row that isn't an array, a row without its index value, an array where a single
   value to match on is expected, a row with the wrong number of values, an invalid increment array)

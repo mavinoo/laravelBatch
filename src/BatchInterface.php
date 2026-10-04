@@ -10,7 +10,7 @@ interface BatchInterface
      * Update many rows, matched on one column, in a single query.
      *
      * @param Model $table
-     * @param array $values
+     * @param array<array-key, mixed> $values
      * @param string|null $index
      * @return int number of affected rows
      */
@@ -20,7 +20,7 @@ interface BatchInterface
      * Update many rows, matched on two columns, in a single query.
      *
      * @param Model $table
-     * @param array $values
+     * @param array<array-key, mixed> $values
      * @param string|null $index
      * @param string|null $index2
      * @return int number of affected rows
@@ -31,7 +31,7 @@ interface BatchInterface
      * Update many rows, each matched on its own set of conditions, in a single query.
      *
      * @param Model $table
-     * @param array $values
+     * @param array<array-key, mixed> $values
      * @param string|null $index
      * @return int number of affected rows
      */
@@ -41,8 +41,8 @@ interface BatchInterface
      * Insert many rows, $batchSize rows per query, in one transaction.
      *
      * @param Model $table
-     * @param array $columns
-     * @param array $values
+     * @param array<int, string> $columns
+     * @param array<array-key, mixed> $values
      * @param int $batchSize
      * @param bool $insertIgnore
      * @return array{totalRows: int, totalBatch: int, totalQuery: int}

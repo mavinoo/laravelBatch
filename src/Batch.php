@@ -5,11 +5,20 @@ namespace Mavinoo\Batch;
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Grammar;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Carbon;
 use InvalidArgumentException;
+use Mavinoo\Batch\Support\RecordingConnection;
 
+/**
+ * @phpstan-type Statement array{0: string, 1: list<mixed>}
+ * @phpstan-type Entry array{conditions: array<string, mixed>, columns: array<string, mixed>}
+ * @phpstan-type CompiledEntry array{conditions: array<string, mixed>, cases: array<string, Statement>, touch: Statement|null, cost: int}
+ * @phpstan-type RecordedQuery array{sql: string, bindings: array<mixed>, connection: string}
+ */
 class Batch implements BatchInterface
 {
     /**
@@ -27,9 +36,30 @@ class Batch implements BatchInterface
     protected const DEFAULT_MAX_BINDINGS = 999;
 
     /**
+     * Maximum number of rows in one UPDATE ... CASE statement.
+     *
+     * The database checks a row against the CASE branches one by one, so the cost of a statement
+     * grows with the square of its rows. Benchmarks on MySQL 8.4, MariaDB 10.11, PostgreSQL 16 and
+     * SQLite 3.45 were fastest at around 100 rows; 5,000-row statements were 10 to 60 times slower.
+     */
+    protected const MAX_ROWS_PER_UPDATE = 100;
+
+    /**
      * @var DatabaseManager
      */
     protected $db;
+
+    /**
+     * Statements recorded by pretend(), or null when Batch runs queries for real.
+     *
+     * @var list<RecordedQuery>|null
+     */
+    private $pretended = null;
+
+    /**
+     * @var array<string, RecordingConnection>
+     */
+    private $recorders = [];
 
     public function __construct(DatabaseManager $db)
     {
@@ -50,7 +80,7 @@ class Batch implements BatchInterface
      * ```
      *
      * @param Model $table
-     * @param array $values rows, each holding the index value and the columns to set
+     * @param array<array-key, mixed> $values rows, each holding the index value and the columns to set
      * @param string|null $index column to match rows on, defaults to the primary key
      * @return int number of affected rows
      *
@@ -66,17 +96,7 @@ class Batch implements BatchInterface
             $index = $table->getKeyName();
         }
 
-        $entries = [];
-        foreach ($values as $row) {
-            $this->assertHasConditions($row, [$index]);
-
-            $conditions = [$index => $row[$index]];
-            unset($row[$index]);
-
-            $entries[] = ['conditions' => $conditions, 'columns' => $row];
-        }
-
-        return $this->runCaseUpdate($table, $entries, [$index]);
+        return $this->updateByKeys($table, $values, [$index]);
     }
 
     /**
@@ -91,7 +111,7 @@ class Batch implements BatchInterface
      * ```
      *
      * @param Model $table
-     * @param array $values rows, each holding both index values and the columns to set
+     * @param array<array-key, mixed> $values rows, each holding both index values and the columns to set
      * @param string|null $index first column to match on, defaults to the primary key
      * @param string|null $index2 second column to match on
      * @return int number of affected rows
@@ -112,17 +132,45 @@ class Batch implements BatchInterface
             throw new InvalidArgumentException('updateWithTwoIndex() requires a second index column.');
         }
 
+        return $this->updateByKeys($table, $values, [$index, $index2]);
+    }
+
+    /**
+     * Update many rows, matched on any number of key columns, in a single query.
+     *
+     * Example:
+     * ```
+     * Batch::updateByKeys(new Score, [
+     *     ['org_id' => 1, 'year' => 2025, 'code' => 'A', 'points' => 10],
+     *     ['org_id' => 1, 'year' => 2026, 'code' => 'B', 'points' => 20],
+     * ], ['org_id', 'year', 'code']);
+     * ```
+     *
+     * @param Model $table
+     * @param array<array-key, mixed> $values rows, each holding every key column and the columns to set
+     * @param array<array-key, mixed> $keys the columns a row is matched on
+     * @return int number of affected rows
+     *
+     * @throws InvalidArgumentException when $keys is empty, a row lacks a key value or an arithmetic array is invalid
+     */
+    public function updateByKeys(Model $table, array $values, array $keys): int
+    {
+        $keys = $this->keyColumns($keys, 'updateByKeys');
+
         $entries = [];
         foreach ($values as $row) {
-            $this->assertHasConditions($row, [$index, $index2]);
+            $this->assertHasConditions($row, $keys);
 
-            $conditions = [$index => $row[$index], $index2 => $row[$index2]];
-            unset($row[$index], $row[$index2]);
+            $conditions = [];
+            foreach ($keys as $key) {
+                $conditions[$key] = $row[$key];
+                unset($row[$key]);
+            }
 
             $entries[] = ['conditions' => $conditions, 'columns' => $row];
         }
 
-        return $this->runCaseUpdate($table, $entries, [$index, $index2]);
+        return $this->runCaseUpdate($table, $entries, $keys);
     }
 
     /**
@@ -141,7 +189,7 @@ class Batch implements BatchInterface
      * ```
      *
      * @param Model $table
-     * @param array $values items of ['conditions' => [column => value], 'columns' => [column => value]]
+     * @param array<array-key, mixed> $values items of ['conditions' => [column => value], 'columns' => [column => value]]
      * @param string|null $index column every item's conditions include, defaults to the primary key
      * @return int number of affected rows
      *
@@ -158,11 +206,12 @@ class Batch implements BatchInterface
 
         $entries = [];
         foreach ($values as $item) {
-            if (!isset($item['conditions'], $item['columns']) || !is_array($item['conditions']) || !is_array($item['columns'])) {
+            if (!is_array($item) || !isset($item['conditions'], $item['columns']) || !is_array($item['conditions']) || !is_array($item['columns'])) {
                 throw new InvalidArgumentException('Each item needs a "conditions" array and a "columns" array.');
             }
 
             $this->assertHasConditions($item['conditions'], [$index]);
+            $this->assertColumnNames($item['columns']);
 
             $entries[] = ['conditions' => $item['conditions'], 'columns' => $item['columns']];
         }
@@ -182,8 +231,8 @@ class Batch implements BatchInterface
      * ```
      *
      * @param Model $table
-     * @param array $columns column names
-     * @param array $values rows, each a list of values in the same order as $columns
+     * @param array<int, string> $columns column names
+     * @param array<array-key, mixed> $values rows, each a list of values in the same order as $columns
      * @param int $batchSize rows per query (at least 100)
      * @param bool $insertIgnore skip rows that hit a unique key (not supported on SQL Server)
      * @return array{totalRows: int, totalBatch: int, totalQuery: int}
@@ -238,10 +287,10 @@ class Batch implements BatchInterface
         // Keep each statement under the driver's bound parameter limit.
         $rowsPerQuery = max(1, min($totalChunk, intdiv($this->maxBindings($connection), count($rows[0]))));
 
-        return $connection->transaction(function () use ($connection, $table, $rows, $rowsPerQuery, $insertIgnore, $totalValues, $totalChunk) {
+        return $this->transaction($connection, function () use ($connection, $table, $rows, $rowsPerQuery, $insertIgnore, $totalValues, $totalChunk) {
             $totalQuery = 0;
             foreach (array_chunk($rows, $rowsPerQuery) as $chunk) {
-                $query = $connection->table($table->getTable());
+                $query = $this->baseQuery($connection, $table);
                 $insertIgnore ? $query->insertOrIgnore($chunk) : $query->insert($chunk);
                 $totalQuery++;
             }
@@ -255,14 +304,329 @@ class Batch implements BatchInterface
     }
 
     /**
+     * Insert many rows given as column => value pairs, $batchSize rows per query, in one transaction.
+     *
+     * Example:
+     * ```
+     * Batch::insertRows(new User, [
+     *     ['name' => 'Ali', 'email' => 'ali@example.com'],
+     *     ['email' => 'sara@example.com', 'name' => 'Sara'], // key order doesn't matter
+     * ]);
+     * ```
+     *
+     * @param Model $table
+     * @param array<array-key, mixed> $rows rows of column => value pairs, all with the same columns
+     * @param int $batchSize rows per query (at least 100)
+     * @param bool $insertIgnore skip rows that hit a unique key (not supported on SQL Server)
+     * @return array{totalRows: int, totalBatch: int, totalQuery: int}
+     *
+     * @throws InvalidArgumentException when a row isn't column => value pairs or has different columns
+     */
+    public function insertRows(Model $table, array $rows, int $batchSize = 500, bool $insertIgnore = false): array
+    {
+        [$columns, $values] = $this->splitRows($rows);
+
+        return $this->insert($table, $columns, $values, $batchSize, $insertIgnore);
+    }
+
+    /**
+     * Insert rows, or update them when a row with the same $uniqueBy values already exists.
+     *
+     * The $uniqueBy columns need a primary or unique index. On MySQL and MariaDB any unique
+     * index decides what counts as an existing row. Timestamps are filled in like Eloquent does:
+     * created_at only for new rows, updated_at for every row.
+     *
+     * Example:
+     * ```
+     * Batch::upsert(new User, [
+     *     ['email' => 'ali@example.com', 'name' => 'Ali', 'score' => 90],
+     *     ['email' => 'sara@example.com', 'name' => 'Sara', 'score' => 75],
+     * ], ['email'], ['name', 'score']);
+     * ```
+     *
+     * @param Model $table
+     * @param array<array-key, mixed> $values rows of column => value pairs, all with the same columns
+     * @param array<int, string>|string $uniqueBy the column(s) that identify an existing row
+     * @param array<array-key, mixed>|null $update columns to update on existing rows; null updates every given column
+     * @return int number of affected rows, as reported by the database
+     *
+     * @throws InvalidArgumentException when $uniqueBy or $update is empty or a row is malformed
+     */
+    public function upsert(Model $table, array $values, $uniqueBy, ?array $update = null): int
+    {
+        $uniqueBy = array_values((array) $uniqueBy);
+
+        if (!$uniqueBy) {
+            throw new InvalidArgumentException('upsert() needs at least one column to match existing rows on.');
+        }
+
+        if ($update === []) {
+            throw new InvalidArgumentException(
+                'upsert() needs columns to update, or null to update every column. '
+                . 'To skip existing rows instead, use insertRows() with $insertIgnore.'
+            );
+        }
+
+        [$columns, $rows] = $this->splitRows($values);
+
+        if (!$rows) {
+            return 0;
+        }
+
+        foreach ($uniqueBy as $column) {
+            if (!in_array($column, $columns, true)) {
+                throw new InvalidArgumentException("Every row must contain the \"{$column}\" column used to match existing rows.");
+            }
+        }
+
+        foreach ($rows as $key => $row) {
+            $rows[$key] = array_combine($columns, array_map([$this, 'enumValue'], $row));
+        }
+
+        $connection = $this->db->connection($this->getConnectionName($table));
+
+        // Keep each statement under the driver's bound parameter limit, counting the timestamps
+        // Eloquent adds and the values bound once per statement for computed updates.
+        $perRow = count($columns) + ($table->usesTimestamps() ? 2 : 0);
+        $perStatement = $update ? count(array_filter(array_keys($update), 'is_string')) : 0;
+        $rowsPerQuery = max(1, intdiv(max(1, $this->maxBindings($connection) - $perStatement), $perRow));
+        $chunks = array_chunk($rows, $rowsPerQuery);
+
+        $run = function () use ($connection, $table, $chunks, $uniqueBy, $update) {
+            $affected = 0;
+            foreach ($chunks as $chunk) {
+                $query = $table->newQueryWithoutScopes()->setQuery($this->baseQuery($connection, $table));
+                $affected += $query->upsert($chunk, $uniqueBy, $update);
+            }
+
+            return $affected;
+        };
+
+        return count($chunks) > 1 ? $this->transaction($connection, $run) : $run();
+    }
+
+    /**
+     * Delete many rows, matched on one or more key columns, in as few queries as possible.
+     *
+     * Models that use SoftDeletes are soft deleted (deleted_at is set, rows already soft deleted
+     * are left alone) unless $force is true, like Eloquent's delete() and forceDelete().
+     *
+     * Example:
+     * ```
+     * Batch::deleteByKeys(new Score, [
+     *     ['org_id' => 1, 'year' => 2025],
+     *     ['org_id' => 2, 'year' => 2026],
+     * ], ['org_id', 'year']);
+     * ```
+     *
+     * @param Model $table
+     * @param array<array-key, mixed> $values rows holding the key values; other columns are ignored
+     * @param array<array-key, mixed> $keys the columns a row is matched on
+     * @param bool $force delete soft-deleting models for real
+     * @return int number of deleted (or soft-deleted) rows
+     *
+     * @throws InvalidArgumentException when $keys is empty or a row lacks a key value
+     */
+    public function deleteByKeys(Model $table, array $values, array $keys, bool $force = false): int
+    {
+        $keys = $this->keyColumns($keys, 'deleteByKeys');
+
+        $matches = [];
+        foreach ($values as $row) {
+            $this->assertHasConditions($row, $keys);
+
+            $match = [];
+            foreach ($keys as $key) {
+                $match[$key] = $row[$key];
+            }
+            $matches[] = $match;
+        }
+
+        if (!$matches) {
+            return 0;
+        }
+
+        $connection = $this->db->connection($this->getConnectionName($table));
+        $grammar = $connection->getQueryGrammar();
+        $deletedAtColumn = null;
+        if (!$force && in_array(SoftDeletes::class, class_uses_recursive($table), true) && method_exists($table, 'getDeletedAtColumn')) {
+            $deletedAtColumn = $table->getDeletedAtColumn();
+        }
+
+        // SET deleted_at = ?[, updated_at = ?] for soft deletes, DELETE otherwise.
+        $prefix = 'DELETE FROM ' . $grammar->wrapTable($table->getTable());
+        $prefixBindings = [];
+        $suffix = '';
+
+        if (is_string($deletedAtColumn)) {
+            $now = Carbon::now()->format($table->getDateFormat());
+            $deletedAt = $grammar->wrap($deletedAtColumn);
+            $sets = [$deletedAt . ' = ?'];
+            $prefixBindings[] = $now;
+
+            if ($table->usesTimestamps() && !is_null($table->getUpdatedAtColumn())) {
+                $sets[] = $grammar->wrap($table->getUpdatedAtColumn()) . ' = ?';
+                $prefixBindings[] = $now;
+            }
+
+            $prefix = 'UPDATE ' . $grammar->wrapTable($table->getTable()) . ' SET ' . implode(', ', $sets);
+            $suffix = ' AND ' . $deletedAt . ' IS NULL';
+        }
+
+        $rowsPerQuery = max(1, intdiv(max(1, $this->maxBindings($connection) - count($prefixBindings)), count($keys)));
+        $statements = [];
+
+        foreach (array_chunk($matches, $rowsPerQuery) as $chunk) {
+            [$whereSql, $whereBindings] = $this->compileKeyMatch($grammar, $chunk, $keys);
+            $statements[] = [$prefix . ' WHERE (' . $whereSql . ')' . $suffix, array_merge($prefixBindings, $whereBindings)];
+        }
+
+        $runner = $this->runner($connection);
+        $run = function () use ($runner, $statements) {
+            $affected = 0;
+            foreach ($statements as [$sql, $bindings]) {
+                $affected += $runner->affectingStatement($sql, $bindings);
+            }
+
+            return $affected;
+        };
+
+        return count($statements) > 1 ? $this->transaction($connection, $run) : $run();
+    }
+
+    /**
+     * Show the statements Batch would run, without running them or connecting to the database.
+     *
+     * Example:
+     * ```
+     * $queries = Batch::pretend(function ($batch) {
+     *     $batch->update(new User, [['id' => 1, 'name' => 'Ali']]);
+     * });
+     * // [['sql' => 'UPDATE `users` SET ... WHERE `id` IN (?)', 'bindings' => [...], 'connection' => 'mysql']]
+     * ```
+     *
+     * The facade, the batch() helper and the HasBatch trait all share this instance, so calls
+     * made through any of them inside the callback are recorded too.
+     *
+     * @param callable $callback receives this Batch instance
+     * @return list<RecordedQuery>
+     */
+    public function pretend(callable $callback): array
+    {
+        // Nested pretend(): the outer call collects everything.
+        if (!is_null($this->pretended)) {
+            $callback($this);
+
+            return [];
+        }
+
+        $this->pretended = [];
+
+        try {
+            $callback($this);
+
+            return $this->pretended;
+        } finally {
+            $this->pretended = null;
+            $this->recorders = [];
+        }
+    }
+
+    /**
+     * The connection statements are sent to: the real one, or a recorder inside pretend().
+     */
+    private function runner(Connection $connection): Connection
+    {
+        if (is_null($this->pretended)) {
+            return $connection;
+        }
+
+        $name = (string) $connection->getName();
+
+        if (!isset($this->recorders[$name])) {
+            $this->recorders[$name] = new RecordingConnection($connection, function (string $sql, array $bindings, string $connectionName) {
+                $this->pretended[] = ['sql' => $sql, 'bindings' => $bindings, 'connection' => $connectionName];
+            });
+        }
+
+        return $this->recorders[$name];
+    }
+
+    /**
+     * Run $work in a transaction on $connection. pretend() records without a transaction.
+     *
+     * @template T
+     * @param \Closure(): T $work
+     * @return T
+     */
+    private function transaction(Connection $connection, \Closure $work): mixed
+    {
+        return is_null($this->pretended) ? $connection->transaction($work) : $work();
+    }
+
+    /**
+     * A query builder on the model's table that sends its statements through runner().
+     */
+    private function baseQuery(Connection $connection, Model $table): QueryBuilder
+    {
+        return (new QueryBuilder($this->runner($connection), $connection->getQueryGrammar(), $connection->getPostProcessor()))
+            ->from($table->getTable());
+    }
+
+    /**
+     * Split rows of column => value pairs into a column list and rows of values in that order.
+     *
+     * @param array<array-key, mixed> $rows
+     * @return array{0: list<string>, 1: list<list<mixed>>}
+     */
+    private function splitRows(array $rows): array
+    {
+        $columns = null;
+        $values = [];
+
+        foreach (array_values($rows) as $i => $row) {
+            if (!is_array($row) || !$row) {
+                throw new InvalidArgumentException("Row {$i} must be a non-empty array of column => value pairs.");
+            }
+
+            $names = [];
+            foreach (array_keys($row) as $column) {
+                if (!is_string($column)) {
+                    throw new InvalidArgumentException("Row {$i} must use column names as keys.");
+                }
+                $names[] = $column;
+            }
+
+            if (is_null($columns)) {
+                $columns = $names;
+            } elseif (count($row) !== count($columns) || array_diff_key($row, array_flip($columns))) {
+                throw new InvalidArgumentException(sprintf(
+                    'Row %d has the columns [%s], but row 0 has [%s]. Every row needs the same columns.',
+                    $i,
+                    implode(', ', array_keys($row)),
+                    implode(', ', $columns)
+                ));
+            }
+
+            $ordered = [];
+            foreach ($columns as $column) {
+                $ordered[] = $row[$column];
+            }
+            $values[] = $ordered;
+        }
+
+        return [$columns ?? [], $values];
+    }
+
+    /**
      * Build and run "UPDATE ... SET col = CASE WHEN ... END" statements.
      *
      * Every value and condition is sent as a bound parameter and every identifier is
      * wrapped by the connection's grammar, so the generated SQL is safe on all drivers.
      *
      * @param Model $model
-     * @param array $entries list of ['conditions' => [col => value], 'columns' => [col => value]]
-     * @param array $whereColumns condition columns used to limit the rows in the WHERE clause
+     * @param list<Entry> $entries
+     * @param list<string> $whereColumns condition columns used to limit the rows in the WHERE clause
      * @return int number of affected rows
      */
     private function runCaseUpdate(Model $model, array $entries, array $whereColumns): int
@@ -287,7 +651,7 @@ class Batch implements BatchInterface
             $compiled = $this->compileEntry($grammar, $entry, $updatedAtColumn, $timestampValue);
             $cost = $compiled['cost'] + count($whereColumns);
 
-            if ($chunk && $chunkCost + $cost > $limit) {
+            if ($chunk && ($chunkCost + $cost > $limit || count($chunk) >= static::MAX_ROWS_PER_UPDATE)) {
                 $chunks[] = $chunk;
                 $chunk = [];
                 $chunkCost = 0;
@@ -308,20 +672,24 @@ class Batch implements BatchInterface
             }
         }
 
-        $run = function () use ($connection, $statements) {
+        $runner = $this->runner($connection);
+        $run = function () use ($runner, $statements) {
             $affected = 0;
             foreach ($statements as [$sql, $bindings]) {
-                $affected += $connection->update($sql, $bindings);
+                $affected += $runner->update($sql, $bindings);
             }
 
             return $affected;
         };
 
-        return count($statements) > 1 ? $connection->transaction($run) : $run();
+        return count($statements) > 1 ? $this->transaction($connection, $run) : $run();
     }
 
     /**
      * Compile the CASE branches contributed by a single row.
+     *
+     * @param Entry $entry
+     * @return CompiledEntry
      */
     private function compileEntry(Grammar $grammar, array $entry, ?string $updatedAtColumn, ?string $timestampValue): array
     {
@@ -346,7 +714,8 @@ class Batch implements BatchInterface
 
             if (is_array($value)) {
                 // Increment / decrement
-                $valueSql = $wrapped . ' ' . $value[0] . ' ' . $this->arithmeticOperand($value);
+                [$operator, $operand] = $this->arithmetic($value);
+                $valueSql = $wrapped . ' ' . $operator . ' ' . $operand;
                 $valueBindings = [];
                 $changes[] = $wrapped . ' IS NOT NULL';
             } else {
@@ -387,7 +756,9 @@ class Batch implements BatchInterface
     /**
      * Compile a chunk of compiled rows into one UPDATE statement.
      *
-     * @return array|null [sql, bindings], or null when there is nothing to update
+     * @param list<CompiledEntry> $chunk
+     * @param list<string> $whereColumns
+     * @return Statement|null [sql, bindings], or null when there is nothing to update
      */
     private function compileUpdateStatement(Grammar $grammar, Model $model, array $chunk, array $whereColumns, ?string $updatedAtColumn, string $driver): ?array
     {
@@ -456,8 +827,9 @@ class Batch implements BatchInterface
     /**
      * Order SET assignments so no CASE reads a condition column that was already assigned.
      *
-     * @param array $whens updated column => CASE branches
-     * @param array $readers condition column => [updated column whose CASE reads it => true]
+     * @param array<string, list<Statement>> $whens updated column => CASE branches
+     * @param array<string, array<string, true>> $readers condition column => [updated column whose CASE reads it => true]
+     * @return array<string, list<Statement>>
      */
     private function orderAssignments(array $whens, array $readers, string $driver): array
     {
@@ -496,7 +868,65 @@ class Batch implements BatchInterface
     }
 
     /**
+     * Match rows on their key values: "key IN (...)" for one key, OR-ed AND groups for several.
+     *
+     * @param list<array<string, mixed>> $matches
+     * @param list<string> $keys
+     * @return Statement
+     */
+    private function compileKeyMatch(Grammar $grammar, array $matches, array $keys): array
+    {
+        if (count($keys) > 1) {
+            $sql = [];
+            $bindings = [];
+            foreach ($matches as $match) {
+                [$conditionSql, $conditionBindings] = $this->compileConditions($grammar, $match);
+                $sql[] = $conditionSql;
+                array_push($bindings, ...$conditionBindings);
+            }
+
+            return [implode(' OR ', $sql), $bindings];
+        }
+
+        $key = $keys[0];
+        $wrapped = $grammar->wrap($key);
+        $placeholders = [];
+        $bindings = [];
+        $matchesNull = false;
+
+        foreach ($matches as $match) {
+            $value = $match[$key];
+
+            if (is_array($value)) {
+                throw new InvalidArgumentException("The value to match \"{$key}\" on must be a single value, not an array.");
+            }
+
+            if (is_null($value)) {
+                $matchesNull = true;
+                continue;
+            }
+
+            [$valueSql, $valueBindings] = $this->compileValue($grammar, $value);
+            $placeholders[] = $valueSql;
+            array_push($bindings, ...$valueBindings);
+        }
+
+        $sql = [];
+        if ($placeholders) {
+            $sql[] = $wrapped . ' IN (' . implode(', ', $placeholders) . ')';
+        }
+        if ($matchesNull) {
+            $sql[] = $wrapped . ' IS NULL';
+        }
+
+        return [implode(' OR ', $sql), $bindings];
+    }
+
+    /**
      * Compile a set of column => value pairs into an AND-ed condition.
+     *
+     * @param array<string, mixed> $conditions
+     * @return Statement
      */
     private function compileConditions(Grammar $grammar, array $conditions): array
     {
@@ -522,8 +952,10 @@ class Batch implements BatchInterface
 
     /**
      * Compile a value to a placeholder, or to its SQL when it's a DB::raw() expression.
+     *
+     * @return Statement
      */
-    private function compileValue(Grammar $grammar, $value): array
+    private function compileValue(Grammar $grammar, mixed $value): array
     {
         if (is_null($value)) {
             return ['NULL', []];
@@ -539,7 +971,7 @@ class Batch implements BatchInterface
     /**
      * Store backed enums by value and other enums by name, on every Laravel version.
      */
-    private function enumValue($value)
+    private function enumValue(mixed $value): mixed
     {
         if ($value instanceof \BackedEnum) {
             return $value->value;
@@ -553,9 +985,12 @@ class Batch implements BatchInterface
     }
 
     /**
-     * Validate an increment / decrement array and return its numeric operand as SQL.
+     * Validate an increment / decrement array and return its operator and numeric operand as SQL.
+     *
+     * @param array<mixed> $value
+     * @return array{0: string, 1: string}
      */
-    private function arithmeticOperand(array $value): string
+    private function arithmetic(array $value): array
     {
         // If array has two values
         if (!array_key_exists(0, $value) || !array_key_exists(1, $value)) {
@@ -573,11 +1008,13 @@ class Batch implements BatchInterface
         $number = $value[1] + 0;
 
         // Parenthesised so a negative operand can never form a "--" comment.
-        return '(' . (is_int($number) ? (string) $number : var_export($number, true)) . ')';
+        return [$value[0], '(' . (is_int($number) ? (string) $number : var_export($number, true)) . ')'];
     }
 
     /**
      * The $raw flag was removed in 3.0. Fail loudly instead of silently storing SQL as text.
+     *
+     * @param array<int, mixed> $arguments
      */
     private function rejectRawArgument(array $arguments, int $position): void
     {
@@ -589,19 +1026,62 @@ class Batch implements BatchInterface
     }
 
     /**
-     * Make sure every row carries the columns used to match it.
+     * Make sure every row is an array of column => value pairs that carries the columns used to match it.
+     *
+     * @param list<string> $columns
+     * @phpstan-assert array<string, mixed> $row
      */
-    private function assertHasConditions($row, array $columns): void
+    private function assertHasConditions(mixed $row, array $columns): void
     {
         if (!is_array($row)) {
             throw new InvalidArgumentException('Every row must be an array of column => value pairs.');
         }
+
+        $this->assertColumnNames($row);
 
         foreach ($columns as $column) {
             if (!array_key_exists($column, $row)) {
                 throw new InvalidArgumentException("Every row must contain a value for the \"{$column}\" column.");
             }
         }
+    }
+
+    /**
+     * Make sure an array is keyed by column names.
+     *
+     * @param array<mixed> $row
+     * @phpstan-assert array<string, mixed> $row
+     */
+    private function assertColumnNames(array $row): void
+    {
+        foreach (array_keys($row) as $column) {
+            if (!is_string($column)) {
+                throw new InvalidArgumentException('Rows must use column names as keys.');
+            }
+        }
+    }
+
+    /**
+     * Validate key columns and return them as a list without duplicates.
+     *
+     * @param array<array-key, mixed> $keys
+     * @return list<string>
+     */
+    private function keyColumns(array $keys, string $method): array
+    {
+        $columns = [];
+        foreach ($keys as $key) {
+            if (!is_string($key) || $key === '') {
+                throw new InvalidArgumentException('Key columns must be given as non-empty strings.');
+            }
+            $columns[$key] = $key;
+        }
+
+        if (!$columns) {
+            throw new InvalidArgumentException("{$method}() needs at least one key column.");
+        }
+
+        return array_values($columns);
     }
 
     /**

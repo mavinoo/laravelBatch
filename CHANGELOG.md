@@ -3,6 +3,33 @@
 All notable changes to `mavinoo/laravel-batch` are documented here.
 Older releases are listed on the [GitHub releases page](https://github.com/mavinoo/laravelBatch/releases).
 
+## 3.1.0 - Unreleased
+
+### Added
+- `updateByKeys()`: update rows matched on any number of key columns.
+- `insertRows()`: insert rows given as column => value pairs.
+- `upsert()`: insert or update in one query, with timestamps, enums and automatic splitting of
+  large batches in one transaction.
+- `pretend()`: return the statements a call would run, with bindings, without running them or
+  connecting to the database.
+- `deleteByKeys()`: delete rows matched on one or more key columns. Soft-deleting models are soft
+  deleted unless `$force` is true.
+- Static `HasBatch` methods: `batchUpdateMultipleCondition()`, `batchUpdateWithTwoIndex()`,
+  `batchUpdateByKeys()`, `batchInsertRows()`, `batchUpsert()` and `batchDeleteByKeys()`.
+- PHPStan (level 9) with Larastan in CI, and a `composer analyse` script.
+
+### Changed
+- Large updates are much faster: each `UPDATE ... CASE` statement now holds at most 100 rows. The
+  database checks every row against the CASE branches one by one, so big statements got slow
+  quickly. Updating 50,000 rows went from 30.5 s to 3.1 s on MySQL 8.4, from 25.3 s to 2.4 s on
+  MariaDB 10.11, and from over 15 minutes to 2.5 s on PostgreSQL 16.
+- The service provider registers one shared `Batch` instance, so the facade, `batch()` and the
+  `HasBatch` trait see the same `pretend()` state.
+
+### Deprecated
+- The instance method `HasBatch::updateMultipleCondition()`; use the static
+  `batchUpdateMultipleCondition()`. It will be removed in 4.0.
+
 ## 3.0.0 - 2026-10-04
 
 Upgrading from 2.x: see [UPGRADE.md](UPGRADE.md).

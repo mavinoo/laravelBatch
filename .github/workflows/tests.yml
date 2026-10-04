@@ -43,6 +43,23 @@ jobs:
       - name: Run tests
         run: vendor/bin/phpunit
 
+  static-analysis:
+    name: PHPStan (level 9)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Run PHPStan
+        run: composer analyse -- --no-progress --error-format=github
+
   databases:
     name: PHP 8.4 / Laravel 13 / ${{ matrix.db }}
     runs-on: ubuntu-latest
