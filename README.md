@@ -190,4 +190,4 @@ DB_CONNECTION=pgsql DB_USERNAME=postgres composer test
 
 # Donate
 
-USDT (BSC / BEP-20) Address: `0xe848f4a94adb70aba2f2da92181096b18aeb269b`
+USDT (BSC) Address: `0xe848f4a94adb70aba2f2da92181096b18aeb269b`
