@@ -25,6 +25,7 @@ Upgrading from 2.x: see [UPGRADE.md](UPGRADE.md).
 ### Added
 - Laravel 13 support.
 - `DB::raw()` values in rows, index values and conditions.
+- Enum values in every method (backed enums by value, other enums by name).
 - Automatic splitting of batches that exceed the database's bound parameter limit, in one transaction.
 - A standalone test suite (`composer test`) for SQLite, MySQL, MariaDB and PostgreSQL.
 - GitHub Actions running the tests on PHP 8.1 – 8.5, Laravel 10 – 13 and every supported database.

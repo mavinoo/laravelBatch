@@ -66,7 +66,8 @@ The update methods always return the number of affected rows (`int`). `0` is sti
 
 Nothing is written when one of these is detected:
 
-- a row without its index value (`update()`, `updateWithTwoIndex()`)
+- a row that isn't an array, or has no index value (`update()`, `updateWithTwoIndex()`)
+- an array where a single value to match on is expected, such as `['id' => [1, 2]]`
 - `updateWithTwoIndex()` without a second index column
 - an `updateMultipleCondition()` item without `conditions` / `columns`, or without the key column in its conditions
 - an `insert()` row with a different number of values than columns

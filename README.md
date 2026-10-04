@@ -41,6 +41,13 @@ $affected = Batch::update(new User, [
 ```
 
 The index defaults to the model's primary key. `update()` returns the number of affected rows.
+MySQL and MariaDB only count rows whose values really changed; PostgreSQL and SQLite count every
+matched row.
+
+If the same index value appears in more than one row of a call, only the first of those rows is applied.
+
+Values can be strings, numbers, booleans, `null`, dates and enums (backed enums are stored by
+their value, other enums by their name).
 
 ## Increment / decrement
 
@@ -158,8 +165,9 @@ batch()->insert(new User, $columns, $values, 500);
 - Batches that would go over the database's limit on bound parameters are split into several
   queries automatically. Several queries always run in one transaction on the model's connection,
   so either every row is written or none is.
-- Invalid input (a row without its index value, a row with the wrong number of values, an invalid
-  increment array) throws an `InvalidArgumentException` before anything is written.
+- Invalid input (a row that isn't an array, a row without its index value, an array where a single
+  value to match on is expected, a row with the wrong number of values, an invalid increment array)
+  throws an `InvalidArgumentException` before anything is written.
 - An empty list of rows does nothing: updates return `0`, and `insert()` returns `totalRows` `0`.
 
 # Tests
