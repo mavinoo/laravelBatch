@@ -16,7 +16,8 @@
     },
     "require-dev": {
         "orchestra/testbench": "^8.0|^9.0|^10.0|^11.0",
-        "phpunit/phpunit": "^10.5|^11.5|^12.5"
+        "phpunit/phpunit": "^10.5|^11.5|^12.5",
+        "larastan/larastan": "^2.9|^3.0"
     },
     "autoload": {
         "psr-4": {
@@ -42,7 +43,8 @@
         }
     },
     "scripts": {
-        "test": "phpunit"
+        "test": "phpunit",
+        "analyse": "phpstan analyse --memory-limit=1G"
     },
     "minimum-stability": "dev",
     "prefer-stable": true
