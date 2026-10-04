@@ -1,218 +1,144 @@
 # Laravel BATCH (BULK)
 
-Insert and update batch (bulk) in laravel
+Insert and update many rows in Laravel with a single query.
 
+[![Tests](https://github.com/mavinoo/laravelBatch/actions/workflows/tests.yml/badge.svg)](https://github.com/mavinoo/laravelBatch/actions/workflows/tests.yml)
 [![License](https://poser.pugx.org/mavinoo/laravel-batch/license)](https://packagist.org/packages/mavinoo/laravel-batch)
 [![Latest Stable Version](https://poser.pugx.org/mavinoo/laravel-batch/v/stable)](https://packagist.org/packages/mavinoo/laravel-batch)
 [![Total Downloads](https://poser.pugx.org/mavinoo/laravel-batch/downloads)](https://packagist.org/packages/mavinoo/laravel-batch)
 [![Daily Downloads](https://poser.pugx.org/mavinoo/laravel-batch/d/daily)](https://packagist.org/packages/mavinoo/laravel-batch)
 
+# Requirements
+
+| laravel-batch | PHP       | Laravel                  | Databases                                          |
+|---------------|-----------|--------------------------|----------------------------------------------------|
+| 3.x           | 8.1 – 8.5 | 10 – 13                  | MySQL, MariaDB, PostgreSQL, SQLite                 |
+| 2.5.x         | 7.1 – 8.5 | not pinned (tested 8, 11) | MySQL, MariaDB (PostgreSQL and SQLite only partly) |
+
+Upgrading from 2.x? Read [UPGRADE.md](UPGRADE.md).
+
 # Install
 
-`composer require mavinoo/laravel-batch`
+```bash
+composer require mavinoo/laravel-batch
+```
 
-# Service Provider
+The service provider and the `Batch` facade are registered automatically.
 
-File `app.php` in array providers:
+# Update
 
-`Mavinoo\Batch\BatchServiceProvider::class,`
-
-# Aliases
-
-File `app.php` in array aliases:
-
-`'Batch' => Mavinoo\Batch\BatchFacade::class,`
-
-# Example Update Multiple Condition
+Each row holds the index value (here `id`) and the columns to set. Rows can set different columns.
 
 ```php
 use App\Models\User;
+use Mavinoo\Batch\BatchFacade as Batch;
 
-$userInstance = new User;
-$arrays = [
+$affected = Batch::update(new User, [
+    ['id' => 1, 'status' => 'active', 'nickname' => 'Mohammad'],
+    ['id' => 5, 'status' => 'deactive'],
+    ['id' => 10, 'date' => now()],
+], 'id');
+```
+
+The index defaults to the model's primary key. `update()` returns the number of affected rows.
+MySQL and MariaDB only count rows whose values really changed; PostgreSQL and SQLite count every
+matched row.
+
+If the same index value appears in more than one row of a call, only the first of those rows is applied.
+
+Values can be strings, numbers, booleans, `null`, dates and enums (backed enums are stored by
+their value, other enums by their name).
+
+## Increment / decrement
+
+```php
+Batch::update(new User, [
+    ['id' => 1, 'balance' => ['+', 500]], // add
+    ['id' => 2, 'balance' => ['-', 200]], // subtract
+    ['id' => 3, 'balance' => ['*', 5]],   // multiply
+    ['id' => 4, 'balance' => ['/', 2]],   // divide
+    ['id' => 5, 'balance' => ['%', 2]],   // modulo
+]);
+```
+
+## Raw SQL values
+
+Wrap a value in `DB::raw()` to use it as SQL instead of as a string:
+
+```php
+use Illuminate\Support\Facades\DB;
+
+Batch::update(new User, [
+    ['id' => 1, 'last_seen_at' => DB::raw('NOW()')],
+    ['id' => 2, 'score' => DB::raw('score * 2 + bonus')],
+]);
+```
+
+> **Never put user input inside `DB::raw()`.** Every other value is sent as a bound parameter and is safe.
+
+## Update with two index columns
+
+Rows are matched on both columns:
+
+```php
+Batch::updateWithTwoIndex(new Membership, [
+    ['user_id' => 1, 'team_id' => 3, 'role' => 'admin'],
+    ['user_id' => 2, 'team_id' => 3, 'role' => 'member'],
+], 'user_id', 'team_id');
+```
+
+## Update with different conditions per row
+
+Each item has its own `conditions` and `columns`. Every item's conditions must include the
+key column (the third argument, the primary key by default).
+
+```php
+Batch::updateMultipleCondition(new User, [
     [
         'conditions' => ['id' => 1, 'status' => 'active'],
-        'columns'    => [
-            'status' => 'invalid',
-            'nickname' => 'mohammad',
-        ],
+        'columns'    => ['status' => 'invalid', 'nickname' => 'mohammad'],
     ],
     [
         'conditions' => ['id' => 2],
-        'columns'    => [
-            'nickname' => 'mavinoo',
-            'name' => 'mohammad',
-        ],
+        'columns'    => ['nickname' => 'mavinoo', 'name' => 'mohammad'],
     ],
-    [
-        'conditions' => ['id' => 3],
-        'columns'    => [
-            'nickname' => 'ali',
-        ],
-    ],
-];
-$keyName = 'id';
-
-Batch::updateMultipleCondition($userInstance, $arrays, $keyName);
-// or
-batch()->updateMultipleCondition($userInstance, $arrays, $keyName);
+], 'id');
 ```
 
-# Example Update 2
+A condition column can be updated in the same call, as `status` is above. On MySQL and MariaDB,
+two columns that are both updated *and* used in each other's conditions can't be updated in one
+call, because MySQL assigns columns one after another. The call throws an
+`InvalidArgumentException`; split it into two calls.
+
+## `updated_at`
+
+If the model uses timestamps, `updated_at` is set to the current time **only for rows where a
+value actually changes**. Pass `updated_at` in a row to set it yourself.
+
+# Insert
 
 ```php
-use App\Models\User;
+$result = Batch::insert(new User, ['name', 'email', 'is_active'], [
+    ['Mohammad', 'mohammad@example.com', true],
+    ['Saeed', 'saeed@example.com', false],
+    ['Avin', 'avin@example.com', true],
+], 500);
 
-$userInstance = new User;
-$value = [
-    [
-        'id' => 1,
-        'status' => 'active',
-        'nickname' => 'Mohammad',
-    ],
-    [
-        'id' => 5,
-        'status' => 'deactive',
-        'nickname' => 'Ghanbari',
-    ],
-];
-$index = 'id';
-
-Batch::update($userInstance, $value, $index);
-// or
-batch()->update($userInstance, $values, $index);
+// ['totalRows' => 3, 'totalBatch' => 500, 'totalQuery' => 1]
 ```
 
-# Example Update 3
+- Each row lists its values in the same order as the columns.
+- `created_at` and `updated_at` are filled in when the model uses timestamps.
+- The fourth argument is the number of rows per query (at least 100, default 500).
+- Pass `true` as the fifth argument to skip rows that hit a unique key (`INSERT IGNORE`).
+  Not supported on SQL Server.
+
+# From a model
+
+Add the `HasBatch` trait:
 
 ```php
-use App\Models\User;
-
-$userInstance = new User;
-$value = [
-    [
-        'id' => 1,
-        'status' => 'active',
-    ],
-    [
-        'id' => 5,
-        'status' => 'deactive',
-        'nickname' => 'Ghanbari',
-    ],
-    [
-        'id' => 10,
-        'status' => 'active',
-        'date' => Carbon::now(),
-    ],
-    [
-        'id' => 11,
-        'username' => 'mavinoo',
-    ],
-];
-$index = 'id';
-
-Batch::update($userInstance, $value, $index);
-// or
-batch()->update($userInstance, $values, $index);
-```
-
-# Example Increment / Decrement
-
-```php
-use App\Models\User;
-
-$userInstance = new User;
-$value = [
-    [
-        'id' => 1,
-        'balance' => ['+', 500], // Add
-    ],
-    [
-        'id' => 2,
-        'balance' => ['-', 200], // Subtract
-    ],
-    [
-        'id' => 3,
-        'balance' => ['*', 5], // Multiply
-    ],
-    [
-        'id' => 4,
-        'balance' => ['/', 2], // Divide
-    ],
-    [
-        'id' => 5,
-        'balance' => ['%', 2], // Modulo
-    ],
-];
-$index = 'id';
-
-Batch::update($userInstance, $value, $index);
-// or
-batch()->update($userInstance, $values, $index);
-```
-
-# Example Insert
-
-```php
-use App\Models\User;
-
-$userInstance = new User;
-$columns = [
-    'firstName',
-    'lastName',
-    'email',
-    'isActive',
-    'status',
-];
-$values = [
-    [
-        'Mohammad',
-        'Ghanbari',
-        'emailSample_1@gmail.com',
-        '1',
-        '0',
-    ],
-    [
-        'Saeed',
-        'Mohammadi',
-        'emailSample_2@gmail.com',
-        '1',
-        '0',
-    ],
-    [
-        'Avin',
-        'Ghanbari',
-        'emailSample_3@gmail.com',
-        '1',
-        '0',
-    ],
-];
-$batchSize = 500; // insert 500 (default), 100 minimum rows in one query
-
-$result = Batch::insert($userInstance, $columns, $values, $batchSize);
-// or
-$result = batch()->insert($userInstance, $values, $index);
-```
-
-```php
-// result: false or array
-
-sample array result:
-Array
-(
-    [totalRows]  => 384
-    [totalBatch] => 500
-    [totalQuery] => 1
-)
-```
-
-# Example called from model
-
-Add `HasBatch` trait into model:
-
-```php
-namespace App\Models;
-
+use Illuminate\Database\Eloquent\Model;
 use Mavinoo\Batch\Traits\HasBatch;
 
 class User extends Model
@@ -221,35 +147,47 @@ class User extends Model
 }
 ```
 
-And call `batchUpdate()` or `batchInsert()` from model:
-
 ```php
-use App\Models\User;
-
-// ex: update
-User::batchUpdate($value, $index);
-
-// ex: insert
-User::batchInsert($columns, $values, $batchSize);
+User::batchUpdate($values, 'id');
+User::batchInsert($columns, $values, 500);
+(new User)->updateMultipleCondition($items, 'id');
 ```
 
-# Helper batch()
+# Helper
 
 ```php
-// ex: update
-$result = batch()->update($userInstance, $value, $index);
-
-
-// ex: insert
-$result = batch()->insert($userInstance, $columns, $values, $batchSize);
+batch()->update(new User, $values, 'id');
+batch()->insert(new User, $columns, $values, 500);
 ```
+
+# Large batches and errors
+
+- Batches that would go over the database's limit on bound parameters are split into several
+  queries automatically. Several queries always run in one transaction on the model's connection,
+  so either every row is written or none is.
+- Invalid input (a row that isn't an array, a row without its index value, an array where a single
+  value to match on is expected, a row with the wrong number of values, an invalid increment array)
+  throws an `InvalidArgumentException` before anything is written.
+- An empty list of rows does nothing: updates return `0`, and `insert()` returns `totalRows` `0`.
 
 # Tests
 
-If you don't have phpunit installed on your project, first run `composer require phpunit/phpunit`
+The tests run on their own, from the root of this package:
 
-In the root of your laravel app, run `./vendor/bin/phpunit ./vendor/mavinoo/laravel-batch/tests`
+```bash
+composer install
+composer test
+```
+
+They use an in-memory SQLite database by default. To run them against MySQL, MariaDB or PostgreSQL,
+create an empty `batch_test` database and set `DB_CONNECTION` (plus `DB_HOST`, `DB_PORT`, `DB_DATABASE`,
+`DB_USERNAME`, `DB_PASSWORD` or `DB_SOCKET` as needed):
+
+```bash
+DB_CONNECTION=mysql DB_USERNAME=root composer test
+DB_CONNECTION=pgsql DB_USERNAME=postgres composer test
+```
 
 # Donate
 
-USDT Address: 0x98410956169cdd00a43fe895303bdca096f37062
+USDT (BSC) Address: `0xe848f4a94adb70aba2f2da92181096b18aeb269b`

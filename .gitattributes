@@ -1,0 +1,6 @@
+# Keep development files out of the package that Composer downloads.
+/.github            export-ignore
+/tests              export-ignore
+/.gitattributes     export-ignore
+/.gitignore         export-ignore
+/phpunit.xml.dist   export-ignore

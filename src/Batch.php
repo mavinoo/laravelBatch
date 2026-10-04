@@ -2,13 +2,30 @@
 
 namespace Mavinoo\Batch;
 
-use Mavinoo\Batch\Common\Common;
+use Illuminate\Contracts\Database\Query\Expression;
+use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\Grammar;
 use Illuminate\Support\Carbon;
+use InvalidArgumentException;
 
 class Batch implements BatchInterface
 {
+    /**
+     * Maximum number of bound parameters sent in a single query, per driver.
+     * Larger batches are split into several queries run in one transaction.
+     */
+    protected const MAX_BINDINGS = [
+        'mysql'   => 65000,
+        'mariadb' => 65000,
+        'pgsql'   => 65000,
+        'sqlsrv'  => 2000,
+        'sqlite'  => 999,
+    ];
+
+    protected const DEFAULT_MAX_BINDINGS = 999;
+
     /**
      * @var DatabaseManager
      */
@@ -20,602 +37,163 @@ class Batch implements BatchInterface
     }
 
     /**
-     * <h2>Update multiple rows.</h2>
+     * Update many rows, matched on one column, in a single query.
      *
-     * Example:<br>
+     * Example:
      * ```
-     * $userInstance = new \App\Models\User;
-     * $value = [
-     *     [
-     *         'id' => 1,
-     *         'status' => 'active',
-     *         'nickname' => 'Mohammad'
-     *     ],
-     *     [
-     *         'id' => 5,
-     *         'status' => 'deactive',
-     *         'nickname' => 'Ghanbari'
-     *     ],
-     *     [
-     *         'id' => 7,
-     *         'balance' => ['+', 500]
-     *     ]
-     * ];
-     * $index = 'id';
-     * Batch::update($userInstance, $value, $index);
+     * Batch::update(new User, [
+     *     ['id' => 1, 'status' => 'active', 'nickname' => 'Mohammad'],
+     *     ['id' => 5, 'status' => 'deactive'],
+     *     ['id' => 7, 'balance' => ['+', 500]],          // arithmetic: + - * / %
+     *     ['id' => 9, 'seen_at' => DB::raw('NOW()')],    // raw SQL for one value
+     * ], 'id');
      * ```
      *
      * @param Model $table
-     * @param array $values
-     * @param string $index
-     * @param bool $raw
-     * @return bool|int
+     * @param array $values rows, each holding the index value and the columns to set
+     * @param string|null $index column to match rows on, defaults to the primary key
+     * @return int number of affected rows
+     *
+     * @throws InvalidArgumentException when a row has no index value or an arithmetic array is invalid
      * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
      * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
      */
-    public function update(Model $table, array $values, ?string $index = null, bool $raw = false)
+    public function update(Model $table, array $values, ?string $index = null): int
     {
-        $final = [];
-        $ids = [];
-        $timestampConditions = []; // Track conditions for timestamp updates
-
-        if (!count($values)) {
-            return false;
-        }
+        $this->rejectRawArgument(func_get_args(), 3);
 
         if (!isset($index) || empty($index)) {
             $index = $table->getKeyName();
         }
 
-        $driver = $table->getConnection()->getDriverName();
-        $updatedAtColumn = null;
-        $timestampValue = null;
+        $entries = [];
+        foreach ($values as $row) {
+            $this->assertHasConditions($row, [$index]);
 
-        if ($table->usesTimestamps()) {
-            $updatedAtColumn = $table->getUpdatedAtColumn();
-            $timestampValue = Carbon::now()->format($table->getDateFormat());
+            $conditions = [$index => $row[$index]];
+            unset($row[$index]);
+
+            $entries[] = ['conditions' => $conditions, 'columns' => $row];
         }
 
-        foreach ($values as $key => $val) {
-            $ids[] = $val[$index];
-            $hasChanges = false;
-            $changeConditions = [];
-
-            foreach (array_keys($val) as $field) {
-                if ($field !== $index && $field !== $updatedAtColumn) {
-                    $hasChanges = true;
-                    
-                    // If increment / decrement
-                    if (gettype($val[$field]) == 'array') {
-                        // If array has two values
-                        if (!array_key_exists(0, $val[$field]) || !array_key_exists(1, $val[$field])) {
-                            throw new \ArgumentCountError('Increment/Decrement array needs to have 2 values, a math operator (+, -, *, /, %) and a number');
-                        }
-                        // Check first value
-                        if (gettype($val[$field][0]) != 'string' || !in_array($val[$field][0], ['+', '-', '*', '/', '%'])) {
-                            throw new \TypeError('First value in Increment/Decrement array needs to be a string and a math operator (+, -, *, /, %)');
-                        }
-                        // Check second value
-                        if (!is_numeric($val[$field][1])) {
-                            throw new \TypeError('Second value in Increment/Decrement array needs to be numeric');
-                        }
-                        // Increment / decrement
-                        // For increment/decrement, always consider it a change
-                        if (Common::disableBacktick($driver)) {
-                            $value = $field . $val[$field][0] . $val[$field][1];
-                            $changeConditions[] = '(' . $field . ' IS NOT NULL)';
-                        } else {
-                            $value = '`' . $field . '`' . $val[$field][0] . $val[$field][1];
-                            $changeConditions[] = '(`' . $field . '` IS NOT NULL)';
-                        }
-                    } else {
-                        // Only update
-                        $finalField = $raw ? Common::mysql_escape($val[$field]) : "'" . Common::mysql_escape($val[$field]) . "'";
-                        $value = (is_null($val[$field]) ? 'NULL' : $finalField);
-                        
-                        // Build condition to check if value actually changes
-                        if (is_null($val[$field])) {
-                            if (Common::disableBacktick($driver)) {
-                                $changeConditions[] = '(' . $field . ' IS NOT NULL)';
-                            } else {
-                                $changeConditions[] = '(`' . $field . '` IS NOT NULL)';
-                            }
-                        } else {
-                            if (Common::disableBacktick($driver)) {
-                                $changeConditions[] = '(' . $field . ' != ' . $finalField . ' OR ' . $field . ' IS NULL)';
-                            } else {
-                                $changeConditions[] = '(`' . $field . '` != ' . $finalField . ' OR `' . $field . '` IS NULL)';
-                            }
-                        }
-                    }
-
-                    if (Common::disableBacktick($driver))
-                        $final[$field][] = 'WHEN ' . $index . ' = \'' . $val[$index] . '\' THEN ' . $value . ' ';
-                    else
-                        $final[$field][] = 'WHEN `' . $index . '` = \'' . $val[$index] . '\' THEN ' . $value . ' ';
-                }
-            }
-
-            // Handle explicit updated_at in values
-            if ($updatedAtColumn && isset($val[$updatedAtColumn])) {
-                $timestampFieldValue = $raw ? Common::mysql_escape($val[$updatedAtColumn]) : "'" . Common::mysql_escape($val[$updatedAtColumn]) . "'";
-                $timestampFieldValue = (is_null($val[$updatedAtColumn]) ? 'NULL' : $timestampFieldValue);
-                
-                if (Common::disableBacktick($driver))
-                    $final[$updatedAtColumn][] = 'WHEN ' . $index . ' = \'' . $val[$index] . '\' THEN ' . $timestampFieldValue . ' ';
-                else
-                    $final[$updatedAtColumn][] = 'WHEN `' . $index . '` = \'' . $val[$index] . '\' THEN ' . $timestampFieldValue . ' ';
-            } elseif ($hasChanges && $updatedAtColumn && count($changeConditions) > 0) {
-                // Only add timestamp update if there are actual field changes
-                $indexCondition = Common::disableBacktick($driver) ? 
-                    $index . ' = \'' . $val[$index] . '\'' : 
-                    '`' . $index . '` = \'' . $val[$index] . '\'';
-                
-                $combinedCondition = $indexCondition . ' AND (' . implode(' OR ', $changeConditions) . ')';
-                
-                if (Common::disableBacktick($driver))
-                    $timestampConditions[] = 'WHEN ' . $combinedCondition . ' THEN \'' . $timestampValue . '\' ';
-                else
-                    $timestampConditions[] = 'WHEN ' . $combinedCondition . ' THEN \'' . $timestampValue . '\' ';
-            }
-        }
-
-        // Add timestamp conditions to final array if we have any
-        // Keep explicit updated_at values, and put updated_at first: MySQL applies SET
-        // assignments left to right, so the change checks must see the old values.
-        if ($updatedAtColumn && (isset($final[$updatedAtColumn]) || !empty($timestampConditions))) {
-            $touches = array_merge($final[$updatedAtColumn] ?? [], $timestampConditions);
-            unset($final[$updatedAtColumn]);
-            $final = [$updatedAtColumn => $touches] + $final;
-        }
-
-        if (Common::disableBacktick($driver)) {
-
-            $cases = '';
-            foreach ($final as $k => $v) {
-                $cases .= '"' . $k . '" = (CASE ' . implode("\n", $v) . "\n"
-                        . 'ELSE "' . $k . '" END), ';
-            }
-
-            $query = "UPDATE \"" . $this->getFullTableName($table) . '" SET ' . substr($cases, 0, -2) . " WHERE \"$index\" IN('" . implode("','", $ids) . "');";
-
-        } else {
-
-            $cases = '';
-            foreach ($final as $k => $v) {
-                $cases .= '`' . $k . '` = (CASE ' . implode("\n", $v) . "\n"
-                        . 'ELSE `' . $k . '` END), ';
-            }
-
-            $query = "UPDATE `" . $this->getFullTableName($table) . "` SET " . substr($cases, 0, -2) . " WHERE `$index` IN(" . '"' . implode('","', $ids) . '"' . ");";
-
-        }
-
-        return $this->db->connection($this->getConnectionName($table))->update($query);
+        return $this->runCaseUpdate($table, $entries, [$index]);
     }
 
     /**
-     * Update multiple rows
+     * Update many rows, matched on two columns, in a single query.
+     *
+     * Example:
+     * ```
+     * Batch::updateWithTwoIndex(new Membership, [
+     *     ['user_id' => 1, 'team_id' => 3, 'role' => 'admin'],
+     *     ['user_id' => 2, 'team_id' => 3, 'role' => 'member'],
+     * ], 'user_id', 'team_id');
+     * ```
+     *
      * @param Model $table
-     * @param array $values
-     * @param string $index
-     * @param string|null $index2
-     * @param bool $raw
-     * @return bool|int
+     * @param array $values rows, each holding both index values and the columns to set
+     * @param string|null $index first column to match on, defaults to the primary key
+     * @param string|null $index2 second column to match on
+     * @return int number of affected rows
+     *
+     * @throws InvalidArgumentException when $index2 is missing, a row lacks an index value or an arithmetic array is invalid
      * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
      * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
-     *
-     * @desc
-     * Example
-     * $table = 'users';
-     * $value = [
-     *     [
-     *         'id' => 1,
-     *         'status' => 'active',
-     *         'nickname' => 'Mohammad'
-     *     ] ,
-     *     [
-     *         'id' => 5,
-     *         'status' => 'deactive',
-     *         'nickname' => 'Ghanbari'
-     *     ] ,
-     * ];
-     * $index = 'id';
-     * $index2 = 'user_id';
-     *
      */
-    public function updateWithTwoIndex(Model $table, array $values, ?string $index = null, ?string $index2 = null, bool $raw = false)
+    public function updateWithTwoIndex(Model $table, array $values, ?string $index = null, ?string $index2 = null): int
     {
-        $final = [];
-        $ids = [];
-        $ids2 = [];
-        $timestampConditions = []; // Track conditions for timestamp updates
-        
-        if (!count($values)) {
-            return false;
-        }
+        $this->rejectRawArgument(func_get_args(), 4);
 
         if (!isset($index) || empty($index)) {
             $index = $table->getKeyName();
         }
 
-        $driver = $table->getConnection()->getDriverName();
-        $updatedAtColumn = null;
-        $timestampValue = null;
-
-        if ($table->usesTimestamps()) {
-            $updatedAtColumn = $table->getUpdatedAtColumn();
-            $timestampValue = Carbon::now()->format($table->getDateFormat());
+        if (!isset($index2) || empty($index2)) {
+            throw new InvalidArgumentException('updateWithTwoIndex() requires a second index column.');
         }
 
-        foreach ($values as $key => $val) {
-            $ids[] = $val[$index];
-            $ids2[] = $val[$index2];
-            $hasChanges = false;
-            $changeConditions = [];
-            
-            foreach (array_keys($val) as $field) {
-                if ($field !== $index && $field !== $index2 && $field !== $updatedAtColumn) {
-                    $hasChanges = true;
-                    
-                    // If increment / decrement
-                    if (gettype($val[$field]) == 'array') {
-                        // If array has two values
-                        if (!array_key_exists(0, $val[$field]) || !array_key_exists(1, $val[$field])) {
-                            throw new \ArgumentCountError('Increment/Decrement array needs to have 2 values, a math operator (+, -, *, /, %) and a number');
-                        }
-                        // Check first value
-                        if (gettype($val[$field][0]) != 'string' || !in_array($val[$field][0], ['+', '-', '*', '/', '%'])) {
-                            throw new \TypeError('First value in Increment/Decrement array needs to be a string and a math operator (+, -, *, /, %)');
-                        }
-                        // Check second value
-                        if (!is_numeric($val[$field][1])) {
-                            throw new \TypeError('Second value in Increment/Decrement array needs to be numeric');
-                        }
-                        // Increment / decrement
-                        // For increment/decrement, always consider it a change
-                        if (Common::disableBacktick($driver)) {
-                            $value = $field . $val[$field][0] . $val[$field][1];
-                            $changeConditions[] = '(' . $field . ' IS NOT NULL)';
-                        } else {
-                            $value = '`' . $field . '`' . $val[$field][0] . $val[$field][1];
-                            $changeConditions[] = '(`' . $field . '` IS NOT NULL)';
-                        }
-                    } else {
-                        // Only update
-                        $finalField = $raw ? Common::mysql_escape($val[$field]) : "'" . Common::mysql_escape($val[$field]) . "'";
-                        $value = (is_null($val[$field]) ? 'NULL' : $finalField);
-                        
-                        // Build condition to check if value actually changes
-                        if (is_null($val[$field])) {
-                            if (Common::disableBacktick($driver)) {
-                                $changeConditions[] = '(' . $field . ' IS NOT NULL)';
-                            } else {
-                                $changeConditions[] = '(`' . $field . '` IS NOT NULL)';
-                            }
-                        } else {
-                            if (Common::disableBacktick($driver)) {
-                                $changeConditions[] = '(' . $field . ' != ' . $finalField . ' OR ' . $field . ' IS NULL)';
-                            } else {
-                                $changeConditions[] = '(`' . $field . '` != ' . $finalField . ' OR `' . $field . '` IS NULL)';
-                            }
-                        }
-                    }
+        $entries = [];
+        foreach ($values as $row) {
+            $this->assertHasConditions($row, [$index, $index2]);
 
-                    if (Common::disableBacktick($driver)) {
-                        $final[$field][] = 'WHEN (' . $index . ' = \'' . Common::mysql_escape($val[$index]) . '\' AND ' . $index2 . ' = \'' . $val[$index2] . '\') THEN ' . $value . ' ';
-                    } else {
-                        $final[$field][] = 'WHEN (`' . $index . '` = "' . Common::mysql_escape($val[$index]) . '" AND `' . $index2 . '` = "' . $val[$index2] . '") THEN ' . $value . ' ';
-                    }
-                }
-            }
+            $conditions = [$index => $row[$index], $index2 => $row[$index2]];
+            unset($row[$index], $row[$index2]);
 
-            // Handle explicit updated_at in values
-            if ($updatedAtColumn && isset($val[$updatedAtColumn])) {
-                $timestampFieldValue = $raw ? Common::mysql_escape($val[$updatedAtColumn]) : "'" . Common::mysql_escape($val[$updatedAtColumn]) . "'";
-                $timestampFieldValue = (is_null($val[$updatedAtColumn]) ? 'NULL' : $timestampFieldValue);
-                
-                if (Common::disableBacktick($driver)) {
-                    $final[$updatedAtColumn][] = 'WHEN (' . $index . ' = \'' . Common::mysql_escape($val[$index]) . '\' AND ' . $index2 . ' = \'' . $val[$index2] . '\') THEN ' . $timestampFieldValue . ' ';
-                } else {
-                    $final[$updatedAtColumn][] = 'WHEN (`' . $index . '` = "' . Common::mysql_escape($val[$index]) . '" AND `' . $index2 . '` = "' . $val[$index2] . '") THEN ' . $timestampFieldValue . ' ';
-                }
-            } elseif ($hasChanges && $updatedAtColumn && count($changeConditions) > 0) {
-                // Only add timestamp update if there are actual field changes
-                $indexCondition = Common::disableBacktick($driver) ? 
-                    '(' . $index . ' = \'' . Common::mysql_escape($val[$index]) . '\' AND ' . $index2 . ' = \'' . $val[$index2] . '\')' : 
-                    '(`' . $index . '` = "' . Common::mysql_escape($val[$index]) . '" AND `' . $index2 . '` = "' . $val[$index2] . '")';
-                
-                $combinedCondition = $indexCondition . ' AND (' . implode(' OR ', $changeConditions) . ')';
-                
-                if (Common::disableBacktick($driver))
-                    $timestampConditions[] = 'WHEN ' . $combinedCondition . ' THEN \'' . $timestampValue . '\' ';
-                else
-                    $timestampConditions[] = 'WHEN ' . $combinedCondition . ' THEN \'' . $timestampValue . '\' ';
-            }
+            $entries[] = ['conditions' => $conditions, 'columns' => $row];
         }
 
-        // Add timestamp conditions to final array if we have any
-        // Keep explicit updated_at values, and put updated_at first: MySQL applies SET
-        // assignments left to right, so the change checks must see the old values.
-        if ($updatedAtColumn && (isset($final[$updatedAtColumn]) || !empty($timestampConditions))) {
-            $touches = array_merge($final[$updatedAtColumn] ?? [], $timestampConditions);
-            unset($final[$updatedAtColumn]);
-            $final = [$updatedAtColumn => $touches] + $final;
-        }
-
-
-        if (Common::disableBacktick($driver)) {
-            $cases = '';
-            foreach ($final as $k => $v) {
-                $cases .= '"' . $k . '" = (CASE ' . implode("\n", $v) . "\n"
-                        . 'ELSE "' . $k . '" END), ';
-            }
-
-            $query = "UPDATE \"" . $this->getFullTableName($table) . '" SET ' . substr($cases, 0, -2) . " WHERE \"$index\" IN('" . implode("','", $ids) . "') AND \"$index2\" IN('" . implode("','", $ids2) . "');";
-            //$query = "UPDATE \"" . $this->getFullTableName($table) . "\" SET " . substr($cases, 0, -2) . " WHERE \"$index\" IN(" . '"' . implode('","', $ids) . '")' . " AND \"$index2\" IN(" . '"' . implode('","', $ids2) . '"' . " );";
-        } else {
-            $cases = '';
-            foreach ($final as $k => $v) {
-                $cases .= '`' . $k . '` = (CASE ' . implode("\n", $v) . "\n"
-                        . 'ELSE `' . $k . '` END), ';
-            }
-            $query = "UPDATE `" . $this->getFullTableName($table) . "` SET " . substr($cases, 0, -2) . " WHERE `$index` IN(" . '"' . implode('","', $ids) . '")' . " AND `$index2` IN(" . '"' . implode('","', $ids2) . '"' . " );";
-        }
-
-        return $this->db->connection($this->getConnectionName($table))->update($query);
+        return $this->runCaseUpdate($table, $entries, [$index, $index2]);
     }
 
     /**
-     * Update multiple condition rows
+     * Update many rows, each matched on its own set of conditions, in a single query.
      *
-     * @param  Model  $table
-     * @param  array  $arrays
-     * @param  string|null  $keyName
-     * @param  bool  $raw
+     * Every item must include the $index column in its conditions. On MySQL / MariaDB,
+     * two condition columns that are both updated and used in each other's conditions
+     * can't be updated in one call, because MySQL assigns columns one after another.
      *
-     * @return bool|int
-     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
-     *
-     * @desc
-     * Example
-     * $table = new \App\Models\User;
-     * $arrays = [
-     *      [
-     *          'conditions' => ['id' => 1, 'status' => 'active'],
-     *          'columns'    => [
-     *              'status' => 'invalid'
-     *              'nickname' => 'mohammad'
-     *          ],
-     *      ],
-     *      [
-     *          'conditions' => ['id' => 2],
-     *          'columns'    => [
-     *              'nickname' => 'mavinoo',
-     *              'name' => 'mohammad',
-     *          ],
-     *      ],
-     *      [
-     *          'conditions' => ['id' => 3],
-     *          'columns'    => [
-     *              'nickname' => 'ali'
-     *          ],
-     *      ],
-     * ];
-     * $keyName = 'id';
-     */
-    public function updateMultipleCondition(Model $table, array $arrays, ?string $keyName = null, bool $raw = false)
-    {
-        $driver = $table->getConnection()->getDriverName();
-        $connectionName = $this->getConnectionName($table);
-        $tableName = $this->getFullTableName($table);
-        $timestamp = $table->usesTimestamps();
-        $backtick = Common::disableBacktick($driver) ? '`' : '';
-
-        if (!count($arrays)) {
-            return false;
-        }
-
-        if (!isset($keyName) || empty($keyName)) {
-            $keyName = $table->getKeyName();
-        }
-
-        $columns = [];
-        $conditionMaster = [];
-        foreach ($arrays as $array) {
-            foreach ($array['conditions'] as $keyCondition => $condition) {
-                if ($keyName == $keyCondition and !in_array($condition, $conditionMaster)) {
-                    $conditionMaster[] = (string) Common::mysql_escape($condition);
-                }
-            }
-            foreach ($array as $key => $item) {
-                if ($key == 'columns') {
-                    foreach ($item as $k => $value) {
-                        if (!in_array($key, $columns)) {
-                            $columns[$k] = $k;
-                        }
-                    }
-                }
-            }
-        }
-
-        $updatedAtColumn = null;
-        $timestampValue = null;
-        
-        if ($timestamp) {
-            $updatedAtColumn = $table->getUpdatedAtColumn();
-            $timestampValue = Carbon::now()->format($table->getDateFormat());
-        }
-
-        $arraysNew = [];
-        $timestampConditions = []; // Track conditions for timestamp updates
-        $keys = array_keys($columns);
-        
-        foreach ($keys as $key) {
-            $arraysMixed = collect($arrays)->filter(function ($rows) use ($key) {
-                return in_array($key, array_keys($rows['columns']));
-            });
-
-            foreach ($arraysMixed as $item) {
-                $value = $raw ? Common::mysql_escape($item['columns'][$key]) : "'" . Common::mysql_escape($item['columns'][$key]) . "'";
-                $arraysNew[$key][] = [
-                        'conditions' => $item['conditions'],
-                        'value'      => is_null($item['columns'][$key]) ? "NULL" : $value,
-                        'originalValue' => $item['columns'][$key], // Store original value for change detection
-                ];
-            }
-        }
-
-        // Handle timestamp updates with change detection
-        if ($timestamp && $updatedAtColumn) {
-            foreach ($arrays as $item) {
-                $hasChanges = false;
-                $changeConditions = [];
-                
-                // Check if this item has any actual field changes
-                foreach ($item['columns'] as $fieldName => $newValue) {
-                    if ($fieldName !== $updatedAtColumn) {
-                        $hasChanges = true;
-                        
-                        // Build condition to check if value actually changes
-                        if (is_null($newValue)) {
-                            $changeConditions[] = " {$backtick}{$fieldName}{$backtick} IS NOT NULL ";
-                        } else {
-                            $escapedValue = $raw ? Common::mysql_escape($newValue) : "'" . Common::mysql_escape($newValue) . "'";
-                            $changeConditions[] = " ({$backtick}{$fieldName}{$backtick} != {$escapedValue} OR {$backtick}{$fieldName}{$backtick} IS NULL) ";
-                        }
-                    }
-                }
-
-                // Handle explicit updated_at in columns
-                if (isset($item['columns'][$updatedAtColumn])) {
-                    $timestampFieldValue = $raw ? Common::mysql_escape($item['columns'][$updatedAtColumn]) : "'" . Common::mysql_escape($item['columns'][$updatedAtColumn]) . "'";
-                    $timestampFieldValue = (is_null($item['columns'][$updatedAtColumn]) ? 'NULL' : $timestampFieldValue);
-                    
-                    $arraysNew[$updatedAtColumn][] = [
-                        'conditions' => $item['conditions'],
-                        'value'      => $timestampFieldValue,
-                        'originalValue' => $item['columns'][$updatedAtColumn],
-                    ];
-                } elseif ($hasChanges && count($changeConditions) > 0) {
-                    // Only add timestamp update if there are actual field changes
-                    $conditionsWithChanges = $item['conditions'];
-                    $timestampConditions[] = [
-                        'conditions' => $conditionsWithChanges,
-                        'value' => "'" . $timestampValue . "'",
-                        'changeConditions' => $changeConditions, // Store change conditions for SQL generation
-                    ];
-                }
-            }
-            
-            // Add timestamp conditions with change detection to arraysNew
-            if (!empty($timestampConditions)) {
-                if (!isset($arraysNew[$updatedAtColumn])) {
-                    $arraysNew[$updatedAtColumn] = [];
-                }
-                
-                foreach ($timestampConditions as $timestampCondition) {
-                    $arraysNew[$updatedAtColumn][] = $timestampCondition;
-                }
-            }
-        }
-
-        // updated_at first: MySQL applies SET assignments left to right.
-        if ($updatedAtColumn && isset($arraysNew[$updatedAtColumn])) {
-            $arraysNew = [$updatedAtColumn => $arraysNew[$updatedAtColumn]] + $arraysNew;
-        }
-
-        $cases = [];
-        foreach ($arraysNew as $key => $items) {
-            $caseSql = "{$backtick}{$key}{$backtick} = (CASE ";
-            foreach ($items as $item) {
-                $conditions = $item['conditions'];
-                $value = $item['value'];
-
-                $conditionContext = [];
-                foreach ($conditions as $conditionKey => $condition) {
-                    $conditionContext[] = " {$backtick}{$conditionKey}{$backtick} = '{$condition}' ";
-                }
-
-                $conditionContext = join(' and ', $conditionContext);
-                
-                // Handle timestamp update with change conditions
-                if ($key === $updatedAtColumn && isset($item['changeConditions']) && !empty($item['changeConditions'])) {
-                    // Add change detection conditions to only update timestamp when fields actually change
-                    $changeConditionsSql = implode(' OR ', $item['changeConditions']);
-                    $caseSql .= " WHEN ($conditionContext) AND ($changeConditionsSql) THEN {$value} ";
-                } else {
-                    $caseSql .= " WHEN $conditionContext THEN {$value} ";
-                }
-            }
-            $caseSql .= " ELSE {$backtick}{$key}{$backtick} END)";
-            $cases[] = $caseSql;
-        }
-        $caseSql = join(', ', $cases);
-        $conditionMaster = join(', ', $conditionMaster);
-
-        $query = "update {$backtick}{$tableName}{$backtick} set {$caseSql} where {$backtick}{$keyName}{$backtick} in ({$conditionMaster})";
-
-        return $this->db->connection($connectionName)->update($query);
-    }
-
-    /**
-     * Insert Multi rows.
+     * Example:
+     * ```
+     * Batch::updateMultipleCondition(new User, [
+     *     ['conditions' => ['id' => 1, 'status' => 'active'], 'columns' => ['status' => 'invalid', 'nickname' => 'mohammad']],
+     *     ['conditions' => ['id' => 2], 'columns' => ['nickname' => 'mavinoo']],
+     * ], 'id');
+     * ```
      *
      * @param Model $table
-     * @param array $columns
-     * @param array $values
-     * @param int $batchSize
-     * @param bool $insertIgnore
-     * @return bool|mixed
-     * @throws \Throwable
-     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
-     * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
-     * @desc
-     * Example
+     * @param array $values items of ['conditions' => [column => value], 'columns' => [column => value]]
+     * @param string|null $index column every item's conditions include, defaults to the primary key
+     * @return int number of affected rows
      *
-     * $table = 'users';
-     * $columns = [
-     *      'firstName',
-     *      'lastName',
-     *      'email',
-     *      'isActive',
-     *      'status',
-     * ];
-     * $values = [
-     *     [
-     *         'Mohammad',
-     *         'Ghanbari',
-     *         'emailSample_1@gmail.com',
-     *         '1',
-     *         '0',
-     *     ] ,
-     *     [
-     *         'Saeed',
-     *         'Mohammadi',
-     *         'emailSample_2@gmail.com',
-     *         '1',
-     *         '0',
-     *     ] ,
-     *     [
-     *         'Avin',
-     *         'Ghanbari',
-     *         'emailSample_3@gmail.com',
-     *         '1',
-     *         '0',
-     *     ] ,
-     * ];
-     * $batchSize = 500; // insert 500 (default), 100 minimum rows in one query
+     * @throws InvalidArgumentException when an item is malformed or the update can't be ordered safely on MySQL
+     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
      */
-    public function insert(Model $table, array $columns, array $values, int $batchSize = 500, bool $insertIgnore = false)
+    public function updateMultipleCondition(Model $table, array $values, ?string $index = null): int
     {
-        // no need for the old validation since we now use type hint that supports from php 7.0
-        // but I kept this one
-        if (count($columns) !== count(current($values))) {
-            return false;
+        $this->rejectRawArgument(func_get_args(), 3);
+
+        if (!isset($index) || empty($index)) {
+            $index = $table->getKeyName();
         }
 
-        $query = [];
+        $entries = [];
+        foreach ($values as $item) {
+            if (!isset($item['conditions'], $item['columns']) || !is_array($item['conditions']) || !is_array($item['columns'])) {
+                throw new InvalidArgumentException('Each item needs a "conditions" array and a "columns" array.');
+            }
+
+            $this->assertHasConditions($item['conditions'], [$index]);
+
+            $entries[] = ['conditions' => $item['conditions'], 'columns' => $item['columns']];
+        }
+
+        return $this->runCaseUpdate($table, $entries, [$index]);
+    }
+
+    /**
+     * Insert many rows, $batchSize rows per query, in one transaction.
+     *
+     * Example:
+     * ```
+     * Batch::insert(new User, ['name', 'email'], [
+     *     ['Mohammad', 'mohammad@example.com'],
+     *     ['Saeed', 'saeed@example.com'],
+     * ], 500);
+     * ```
+     *
+     * @param Model $table
+     * @param array $columns column names
+     * @param array $values rows, each a list of values in the same order as $columns
+     * @param int $batchSize rows per query (at least 100)
+     * @param bool $insertIgnore skip rows that hit a unique key (not supported on SQL Server)
+     * @return array{totalRows: int, totalBatch: int, totalQuery: int}
+     *
+     * @throws InvalidArgumentException when a row doesn't have one value per column
+     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
+     * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
+     */
+    public function insert(Model $table, array $columns, array $values, int $batchSize = 500, bool $insertIgnore = false): array
+    {
         $minChunck = 100;
 
         $totalValues = count($values);
@@ -623,101 +201,415 @@ class Batch implements BatchInterface
 
         $totalChunk = ($batchSizeInsert < $minChunck) ? $minChunck : $batchSizeInsert;
 
-        $values = array_chunk($values, $totalChunk, true);
+        if (!$totalValues) {
+            return ['totalRows' => 0, 'totalBatch' => $totalChunk, 'totalQuery' => 0];
+        }
+
+        $rows = [];
+        foreach (array_values($values) as $i => $row) {
+            if (!is_array($row) || count($row) !== count($columns) || !count($columns)) {
+                throw new InvalidArgumentException(sprintf(
+                    'Row %d has %d values, but there are %d columns.',
+                    $i,
+                    is_array($row) ? count($row) : 0,
+                    count($columns)
+                ));
+            }
+
+            $rows[] = array_combine($columns, array_map([$this, 'enumValue'], array_values($row)));
+        }
 
         if ($table->usesTimestamps()) {
-            $createdAtColumn = $table->getCreatedAtColumn();
-            $updatedAtColumn = $table->getUpdatedAtColumn();
             $now = Carbon::now()->format($table->getDateFormat());
 
-            $addCreatedAtValue = false;
-            $addUpdatedAtValue = false;
+            foreach ([$table->getCreatedAtColumn(), $table->getUpdatedAtColumn()] as $timestampColumn) {
+                if (is_null($timestampColumn) || in_array($timestampColumn, $columns)) {
+                    continue;
+                }
 
-            if (!in_array($createdAtColumn, $columns)) {
-                $addCreatedAtValue = true;
-                array_push($columns, $createdAtColumn);
-            }
-
-            if (!in_array($updatedAtColumn, $columns)) {
-                $addUpdatedAtValue = true;
-                array_push($columns, $updatedAtColumn);
-            }
-
-            foreach ($values as $key => $value) {
-                foreach ($value as $rowKey => $row) {
-                    if ($addCreatedAtValue) {
-                        array_push($values[$key][$rowKey], $now);
-                    }
-
-                    if ($addUpdatedAtValue) {
-                        array_push($values[$key][$rowKey], $now);
-                    }
+                foreach ($rows as $key => $row) {
+                    $rows[$key][$timestampColumn] = $now;
                 }
             }
         }
 
-        $driver = $table->getConnection()->getDriverName();
+        $connection = $this->db->connection($this->getConnectionName($table));
 
-        if (Common::disableBacktick($driver)) {
-            foreach ($columns as $key => $column) {
-                $columns[$key] = '"' . Common::mysql_escape($column) . '"';
-            }
-        } else {
-            foreach ($columns as $key => $column) {
-                $columns[$key] = '`' . Common::mysql_escape($column) . '`';
-            }
-        }
+        // Keep each statement under the driver's bound parameter limit.
+        $rowsPerQuery = max(1, min($totalChunk, intdiv($this->maxBindings($connection), count($rows[0]))));
 
-        foreach ($values as $value) {
-            $valueArray = [];
-            foreach ($value as $data) {
-                foreach ($data as $key => $item) {
-                    $item = is_null($item) ? 'NULL' : "'" . Common::mysql_escape($item) . "'";
-                    $data[$key] = $item;
-                }
-
-                $valueArray[] = '(' . implode(',', $data) . ')';
+        return $connection->transaction(function () use ($connection, $table, $rows, $rowsPerQuery, $insertIgnore, $totalValues, $totalChunk) {
+            $totalQuery = 0;
+            foreach (array_chunk($rows, $rowsPerQuery) as $chunk) {
+                $query = $connection->table($table->getTable());
+                $insertIgnore ? $query->insertOrIgnore($chunk) : $query->insert($chunk);
+                $totalQuery++;
             }
 
-            $valueString = implode(', ', $valueArray);
-
-            $ignoreStmt = $insertIgnore ? ' IGNORE ' : '';
-
-            if (Common::disableBacktick($driver)) {
-                $query[] = 'INSERT ' . $ignoreStmt . ' INTO "' . $this->getFullTableName($table) . '" (' . implode(',', $columns) . ") VALUES $valueString;";
-            } else {
-                $query[] = 'INSERT ' . $ignoreStmt . ' INTO `' . $this->getFullTableName($table) . '` (' . implode(',', $columns) . ") VALUES $valueString;";
-            }
-        }
-
-        if (count($query)) {
-            return $this->db->transaction(function () use ($totalValues, $totalChunk, $query, $table) {
-                $totalQuery = 0;
-                foreach ($query as $value) {
-                    $totalQuery += $this->db->connection($this->getConnectionName($table))->statement($value) ? 1 : 0;
-                }
-
-                return [
-                        'totalRows' => $totalValues,
-                        'totalBatch' => $totalChunk,
-                        'totalQuery' => $totalQuery
-                ];
-            });
-        }
-
-        return false;
+            return [
+                    'totalRows' => $totalValues,
+                    'totalBatch' => $totalChunk,
+                    'totalQuery' => $totalQuery
+            ];
+        });
     }
 
     /**
-     * Get full table name.
+     * Build and run "UPDATE ... SET col = CASE WHEN ... END" statements.
+     *
+     * Every value and condition is sent as a bound parameter and every identifier is
+     * wrapped by the connection's grammar, so the generated SQL is safe on all drivers.
      *
      * @param Model $model
-     * @return string
-     * @author Ibrahim Sakr <ebrahimes@gmail.com>
+     * @param array $entries list of ['conditions' => [col => value], 'columns' => [col => value]]
+     * @param array $whereColumns condition columns used to limit the rows in the WHERE clause
+     * @return int number of affected rows
      */
-    private function getFullTableName(Model $model)
+    private function runCaseUpdate(Model $model, array $entries, array $whereColumns): int
     {
-        return $model->getConnection()->getTablePrefix() . $model->getTable();
+        $connection = $this->db->connection($this->getConnectionName($model));
+        $grammar = $connection->getQueryGrammar();
+
+        $updatedAtColumn = null;
+        $timestampValue = null;
+
+        if ($model->usesTimestamps()) {
+            $updatedAtColumn = $model->getUpdatedAtColumn();
+            $timestampValue = Carbon::now()->format($model->getDateFormat());
+        }
+
+        $limit = $this->maxBindings($connection);
+        $chunks = [];
+        $chunk = [];
+        $chunkCost = 0;
+
+        foreach ($entries as $entry) {
+            $compiled = $this->compileEntry($grammar, $entry, $updatedAtColumn, $timestampValue);
+            $cost = $compiled['cost'] + count($whereColumns);
+
+            if ($chunk && $chunkCost + $cost > $limit) {
+                $chunks[] = $chunk;
+                $chunk = [];
+                $chunkCost = 0;
+            }
+
+            $chunk[] = $compiled;
+            $chunkCost += $cost;
+        }
+
+        if ($chunk) {
+            $chunks[] = $chunk;
+        }
+
+        $statements = [];
+        foreach ($chunks as $chunk) {
+            if ($statement = $this->compileUpdateStatement($grammar, $model, $chunk, $whereColumns, $updatedAtColumn, $connection->getDriverName())) {
+                $statements[] = $statement;
+            }
+        }
+
+        $run = function () use ($connection, $statements) {
+            $affected = 0;
+            foreach ($statements as [$sql, $bindings]) {
+                $affected += $connection->update($sql, $bindings);
+            }
+
+            return $affected;
+        };
+
+        return count($statements) > 1 ? $connection->transaction($run) : $run();
+    }
+
+    /**
+     * Compile the CASE branches contributed by a single row.
+     */
+    private function compileEntry(Grammar $grammar, array $entry, ?string $updatedAtColumn, ?string $timestampValue): array
+    {
+        [$whenSql, $whenBindings] = $this->compileConditions($grammar, $entry['conditions']);
+
+        $cases = [];
+        $touch = null;
+        $changes = [];
+        $changeBindings = [];
+
+        foreach ($entry['columns'] as $column => $value) {
+            $wrapped = $grammar->wrap($column);
+
+            if ($column === $updatedAtColumn) {
+                // An explicit non-null updated_at wins over the automatic timestamp.
+                if (!is_null($value)) {
+                    [$valueSql, $valueBindings] = $this->compileValue($grammar, $value);
+                    $touch = ['WHEN ' . $whenSql . ' THEN ' . $valueSql, array_merge($whenBindings, $valueBindings)];
+                }
+                continue;
+            }
+
+            if (is_array($value)) {
+                // Increment / decrement
+                $valueSql = $wrapped . ' ' . $value[0] . ' ' . $this->arithmeticOperand($value);
+                $valueBindings = [];
+                $changes[] = $wrapped . ' IS NOT NULL';
+            } else {
+                [$valueSql, $valueBindings] = $this->compileValue($grammar, $value);
+
+                // Null-safe "value actually changes" check, used for the automatic timestamp.
+                if (is_null($value)) {
+                    $changes[] = $wrapped . ' IS NOT NULL';
+                } else {
+                    $changes[] = '(' . $wrapped . ' <> ' . $valueSql . ' OR ' . $wrapped . ' IS NULL)';
+                    $changeBindings = array_merge($changeBindings, $valueBindings);
+                }
+            }
+
+            $cases[$column] = ['WHEN ' . $whenSql . ' THEN ' . $valueSql, array_merge($whenBindings, $valueBindings)];
+        }
+
+        if (is_null($touch) && $updatedAtColumn && count($changes)) {
+            $touch = [
+                'WHEN ' . $whenSql . ' AND (' . implode(' OR ', $changes) . ') THEN ?',
+                array_merge($whenBindings, $changeBindings, [$timestampValue]),
+            ];
+        }
+
+        $cost = $touch ? count($touch[1]) : 0;
+        foreach ($cases as [, $bindings]) {
+            $cost += count($bindings);
+        }
+
+        return [
+            'conditions' => $entry['conditions'],
+            'cases' => $cases,
+            'touch' => $touch,
+            'cost' => $cost,
+        ];
+    }
+
+    /**
+     * Compile a chunk of compiled rows into one UPDATE statement.
+     *
+     * @return array|null [sql, bindings], or null when there is nothing to update
+     */
+    private function compileUpdateStatement(Grammar $grammar, Model $model, array $chunk, array $whereColumns, ?string $updatedAtColumn, string $driver): ?array
+    {
+        $whens = [];
+        $touches = [];
+        $readers = []; // condition column => [updated column whose CASE reads it => true]
+
+        foreach ($chunk as $compiled) {
+            foreach ($compiled['cases'] as $column => $case) {
+                $whens[$column][] = $case;
+
+                foreach (array_keys($compiled['conditions']) as $conditionColumn) {
+                    $readers[$conditionColumn][$column] = true;
+                }
+            }
+
+            if ($compiled['touch']) {
+                $touches[] = $compiled['touch'];
+            }
+        }
+
+        // MySQL evaluates SET assignments left to right and later ones see the new values,
+        // so a column used in conditions must be assigned after every CASE that reads it.
+        $whens = $this->orderAssignments($whens, $readers, $driver);
+
+        // updated_at goes first, so the change detection runs before any column changes.
+        if ($touches) {
+            $whens = [$updatedAtColumn => $touches] + $whens;
+        }
+
+        if (!$whens) {
+            return null;
+        }
+
+        $sets = [];
+        $bindings = [];
+
+        foreach ($whens as $column => $cases) {
+            $wrapped = $grammar->wrap($column);
+            $sets[] = $wrapped . ' = (CASE ' . implode(' ', array_column($cases, 0)) . ' ELSE ' . $wrapped . ' END)';
+
+            foreach ($cases as [, $caseBindings]) {
+                array_push($bindings, ...$caseBindings);
+            }
+        }
+
+        $wheres = [];
+        foreach ($whereColumns as $whereColumn) {
+            $ids = [];
+            foreach ($chunk as $compiled) {
+                [$idSql, $idBindings] = $this->compileValue($grammar, $compiled['conditions'][$whereColumn]);
+                $ids[] = $idSql;
+                array_push($bindings, ...$idBindings);
+            }
+
+            $wheres[] = $grammar->wrap($whereColumn) . ' IN (' . implode(', ', $ids) . ')';
+        }
+
+        $sql = 'UPDATE ' . $grammar->wrapTable($model->getTable())
+            . ' SET ' . implode(', ', $sets)
+            . ' WHERE ' . implode(' AND ', $wheres);
+
+        return [$sql, $bindings];
+    }
+
+    /**
+     * Order SET assignments so no CASE reads a condition column that was already assigned.
+     *
+     * @param array $whens updated column => CASE branches
+     * @param array $readers condition column => [updated column whose CASE reads it => true]
+     */
+    private function orderAssignments(array $whens, array $readers, string $driver): array
+    {
+        $pending = array_keys($whens);
+        $ordered = [];
+
+        while ($pending) {
+            foreach ($pending as $i => $column) {
+                $waitingFor = array_diff(array_keys($readers[$column] ?? []), [$column], $ordered);
+
+                if (!$waitingFor) {
+                    $ordered[] = $column;
+                    unset($pending[$i]);
+                    continue 2;
+                }
+            }
+
+            // Columns that are conditions of each other: no order works on MySQL.
+            if (in_array($driver, ['mysql', 'mariadb'], true)) {
+                throw new InvalidArgumentException(
+                    'MySQL cannot update the condition columns [' . implode(', ', $pending) . '] in one query, '
+                    . 'because each is used in the conditions of another. Split the update into separate calls.'
+                );
+            }
+
+            // Other databases evaluate every assignment against the old row, so order doesn't matter.
+            return $whens;
+        }
+
+        $result = [];
+        foreach ($ordered as $column) {
+            $result[$column] = $whens[$column];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Compile a set of column => value pairs into an AND-ed condition.
+     */
+    private function compileConditions(Grammar $grammar, array $conditions): array
+    {
+        $sql = [];
+        $bindings = [];
+
+        foreach ($conditions as $column => $value) {
+            if (is_array($value)) {
+                throw new InvalidArgumentException("The value to match \"{$column}\" on must be a single value, not an array.");
+            }
+
+            if (is_null($value)) {
+                $sql[] = $grammar->wrap($column) . ' IS NULL';
+            } else {
+                [$valueSql, $valueBindings] = $this->compileValue($grammar, $value);
+                $sql[] = $grammar->wrap($column) . ' = ' . $valueSql;
+                array_push($bindings, ...$valueBindings);
+            }
+        }
+
+        return ['(' . implode(' AND ', $sql) . ')', $bindings];
+    }
+
+    /**
+     * Compile a value to a placeholder, or to its SQL when it's a DB::raw() expression.
+     */
+    private function compileValue(Grammar $grammar, $value): array
+    {
+        if (is_null($value)) {
+            return ['NULL', []];
+        }
+
+        if ($value instanceof Expression) {
+            return [(string) $grammar->getValue($value), []];
+        }
+
+        return ['?', [$this->enumValue($value)]];
+    }
+
+    /**
+     * Store backed enums by value and other enums by name, on every Laravel version.
+     */
+    private function enumValue($value)
+    {
+        if ($value instanceof \BackedEnum) {
+            return $value->value;
+        }
+
+        if ($value instanceof \UnitEnum) {
+            return $value->name;
+        }
+
+        return $value;
+    }
+
+    /**
+     * Validate an increment / decrement array and return its numeric operand as SQL.
+     */
+    private function arithmeticOperand(array $value): string
+    {
+        // If array has two values
+        if (!array_key_exists(0, $value) || !array_key_exists(1, $value)) {
+            throw new InvalidArgumentException('Increment/Decrement array needs to have 2 values, a math operator (+, -, *, /, %) and a number');
+        }
+        // Check first value
+        if (gettype($value[0]) != 'string' || !in_array($value[0], ['+', '-', '*', '/', '%'])) {
+            throw new InvalidArgumentException('First value in Increment/Decrement array needs to be a string and a math operator (+, -, *, /, %)');
+        }
+        // Check second value
+        if (!is_numeric($value[1]) || !is_finite((float) $value[1])) {
+            throw new InvalidArgumentException('Second value in Increment/Decrement array needs to be numeric');
+        }
+
+        $number = $value[1] + 0;
+
+        // Parenthesised so a negative operand can never form a "--" comment.
+        return '(' . (is_int($number) ? (string) $number : var_export($number, true)) . ')';
+    }
+
+    /**
+     * The $raw flag was removed in 3.0. Fail loudly instead of silently storing SQL as text.
+     */
+    private function rejectRawArgument(array $arguments, int $position): void
+    {
+        if (($arguments[$position] ?? false) === true) {
+            throw new InvalidArgumentException(
+                'The $raw argument was removed in laravel-batch 3.0. Wrap raw SQL values in DB::raw() instead.'
+            );
+        }
+    }
+
+    /**
+     * Make sure every row carries the columns used to match it.
+     */
+    private function assertHasConditions($row, array $columns): void
+    {
+        if (!is_array($row)) {
+            throw new InvalidArgumentException('Every row must be an array of column => value pairs.');
+        }
+
+        foreach ($columns as $column) {
+            if (!array_key_exists($column, $row)) {
+                throw new InvalidArgumentException("Every row must contain a value for the \"{$column}\" column.");
+            }
+        }
+    }
+
+    /**
+     * Get the maximum number of bound parameters to send in one query.
+     */
+    private function maxBindings(Connection $connection): int
+    {
+        return static::MAX_BINDINGS[$connection->getDriverName()] ?? static::DEFAULT_MAX_BINDINGS;
     }
 
     /**

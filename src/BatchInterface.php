@@ -7,48 +7,45 @@ use Illuminate\Database\Eloquent\Model;
 interface BatchInterface
 {
     /**
-     * Update multiple rows.
+     * Update many rows, matched on one column, in a single query.
      *
      * @param Model $table
      * @param array $values
      * @param string|null $index
-     * @param bool $raw
-     * @return mixed
+     * @return int number of affected rows
      */
-    public function update(Model $table, array $values, ?string $index = null, bool $raw = false);
+    public function update(Model $table, array $values, ?string $index = null): int;
 
     /**
-     * Update multiple rows with two index.
+     * Update many rows, matched on two columns, in a single query.
      *
      * @param Model $table
      * @param array $values
      * @param string|null $index
      * @param string|null $index2
-     * @param bool $raw
-     * @return mixed
+     * @return int number of affected rows
      */
-    public function updateWithTwoIndex(Model $table, array $values, ?string $index = null, ?string $index2 = null, bool $raw = false);
+    public function updateWithTwoIndex(Model $table, array $values, ?string $index = null, ?string $index2 = null): int;
 
     /**
-     * Update multiple condition rows.
+     * Update many rows, each matched on its own set of conditions, in a single query.
      *
      * @param Model $table
      * @param array $values
      * @param string|null $index
-     * @param bool $raw
-     * @return mixed
+     * @return int number of affected rows
      */
-    public function updateMultipleCondition(Model $table, array $values, ?string $index = null, bool $raw = false);
+    public function updateMultipleCondition(Model $table, array $values, ?string $index = null): int;
 
     /**
-     * Insert multiple rows.
+     * Insert many rows, $batchSize rows per query, in one transaction.
      *
      * @param Model $table
      * @param array $columns
      * @param array $values
      * @param int $batchSize
      * @param bool $insertIgnore
-     * @return mixed
+     * @return array{totalRows: int, totalBatch: int, totalQuery: int}
      */
-    public function insert(Model $table, array $columns, array $values, int $batchSize = 500, bool $insertIgnore = false);
+    public function insert(Model $table, array $columns, array $values, int $batchSize = 500, bool $insertIgnore = false): array;
 }

@@ -1,0 +1,100 @@
+name: Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sqlite:
+    name: PHP ${{ matrix.php }} / Laravel ${{ matrix.laravel }} / SQLite
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Each Laravel version on its lowest and highest supported PHP.
+          - { php: '8.1', laravel: '10', testbench: '^8.0' }
+          - { php: '8.3', laravel: '10', testbench: '^8.0' }
+          - { php: '8.2', laravel: '11', testbench: '^9.0' }
+          - { php: '8.4', laravel: '11', testbench: '^9.0' }
+          - { php: '8.2', laravel: '12', testbench: '^10.0' }
+          - { php: '8.5', laravel: '12', testbench: '^10.0' }
+          - { php: '8.3', laravel: '13', testbench: '^11.0' }
+          - { php: '8.5', laravel: '13', testbench: '^11.0' }
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pdo_sqlite
+          coverage: none
+
+      - name: Install dependencies
+        run: |
+          composer require --dev "orchestra/testbench:${{ matrix.testbench }}" --no-update --no-interaction
+          composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Run tests
+        run: vendor/bin/phpunit
+
+  databases:
+    name: PHP 8.4 / Laravel 13 / ${{ matrix.db }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { db: mysql, port: 3306, username: root, password: '' }
+          - { db: mariadb, port: 3307, username: root, password: '' }
+          - { db: pgsql, port: 5432, username: postgres, password: postgres }
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+          MYSQL_DATABASE: batch_test
+        ports: ['3306:3306']
+        options: --health-cmd="mysqladmin ping" --health-interval=5s --health-timeout=5s --health-retries=20
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: '1'
+          MARIADB_DATABASE: batch_test
+        ports: ['3307:3306']
+        options: --health-cmd="healthcheck.sh --connect --innodb_initialized" --health-interval=5s --health-timeout=5s --health-retries=20
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: batch_test
+        ports: ['5432:5432']
+        options: --health-cmd=pg_isready --health-interval=5s --health-timeout=5s --health-retries=20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo_mysql, pdo_pgsql
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Run tests
+        run: vendor/bin/phpunit
+        env:
+          DB_CONNECTION: ${{ matrix.db }}
+          DB_HOST: 127.0.0.1
+          DB_PORT: ${{ matrix.port }}
+          DB_DATABASE: batch_test
+          DB_USERNAME: ${{ matrix.username }}
+          DB_PASSWORD: ${{ matrix.password }}

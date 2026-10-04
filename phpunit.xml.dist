@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true">
+    <testsuites>
+        <testsuite name="Batch">
+            <directory>tests/Feature</directory>
+        </testsuite>
+    </testsuites>
+    <php>
+        <!-- sqlite (default), mysql, mariadb or pgsql. Override from the shell, e.g. DB_CONNECTION=pgsql composer test -->
+        <env name="DB_CONNECTION" value="sqlite"/>
+    </php>
+</phpunit>
