@@ -246,9 +246,21 @@ $result = batch()->insert($userInstance, $columns, $values, $batchSize);
 
 # Tests
 
-If you don't have phpunit installed on your project, first run `composer require phpunit/phpunit`
+The tests run on their own, from the root of this package:
 
-In the root of your laravel app, run `./vendor/bin/phpunit ./vendor/mavinoo/laravel-batch/tests`
+```bash
+composer install
+composer test
+```
+
+They use an in-memory SQLite database by default. To run them against MySQL, MariaDB or PostgreSQL,
+create an empty `batch_test` database and set `DB_CONNECTION` (plus `DB_HOST`, `DB_PORT`, `DB_DATABASE`,
+`DB_USERNAME`, `DB_PASSWORD` or `DB_SOCKET` as needed):
+
+```bash
+DB_CONNECTION=mysql DB_USERNAME=root composer test
+DB_CONNECTION=pgsql DB_USERNAME=postgres composer test
+```
 
 # Donate
 
