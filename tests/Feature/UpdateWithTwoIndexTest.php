@@ -65,6 +65,13 @@ class UpdateWithTwoIndexTest extends TestCase
         $this->assertEquals(101, $this->row(2)->balance);
     }
 
+    public function test_row_that_is_not_an_array_throws(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->batch()->updateWithTwoIndex(new User, ['oops'], 'id', 'org');
+    }
+
     public function test_second_index_is_required(): void
     {
         $this->expectException(InvalidArgumentException::class);

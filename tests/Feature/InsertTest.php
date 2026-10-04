@@ -7,7 +7,9 @@ use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use Mavinoo\Batch\Tests\Fixtures\NoCreatedAtUser;
 use Mavinoo\Batch\Tests\Fixtures\NoUpdatedAtUser;
+use Mavinoo\Batch\Tests\Fixtures\Size;
 use Mavinoo\Batch\Tests\Fixtures\SmallBatch;
+use Mavinoo\Batch\Tests\Fixtures\Status;
 use Mavinoo\Batch\Tests\Fixtures\User;
 use Mavinoo\Batch\Tests\Fixtures\UserWithoutTimestamps;
 use Mavinoo\Batch\Tests\TestCase;
@@ -133,6 +135,14 @@ class InsertTest extends TestCase
         });
 
         $this->assertCount(0, $queries);
+    }
+
+    public function test_enum_values(): void
+    {
+        $this->batch()->insert(new User, ['id', 'name', 'phone'], [[1, Status::Active, Size::Small]]);
+
+        $this->assertSame('active', $this->row(1)->name);
+        $this->assertSame('Small', $this->row(1)->phone);
     }
 
     public function test_db_raw_values(): void

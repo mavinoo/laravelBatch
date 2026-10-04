@@ -55,6 +55,8 @@ class Batch implements BatchInterface
      * @return int number of affected rows
      *
      * @throws InvalidArgumentException when a row has no index value or an arithmetic array is invalid
+     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
+     * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
      */
     public function update(Model $table, array $values, ?string $index = null): int
     {
@@ -95,6 +97,8 @@ class Batch implements BatchInterface
      * @return int number of affected rows
      *
      * @throws InvalidArgumentException when $index2 is missing, a row lacks an index value or an arithmetic array is invalid
+     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
+     * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
      */
     public function updateWithTwoIndex(Model $table, array $values, ?string $index = null, ?string $index2 = null): int
     {
@@ -142,6 +146,7 @@ class Batch implements BatchInterface
      * @return int number of affected rows
      *
      * @throws InvalidArgumentException when an item is malformed or the update can't be ordered safely on MySQL
+     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
      */
     public function updateMultipleCondition(Model $table, array $values, ?string $index = null): int
     {
@@ -184,6 +189,8 @@ class Batch implements BatchInterface
      * @return array{totalRows: int, totalBatch: int, totalQuery: int}
      *
      * @throws InvalidArgumentException when a row doesn't have one value per column
+     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
+     * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
      */
     public function insert(Model $table, array $columns, array $values, int $batchSize = 500, bool $insertIgnore = false): array
     {
@@ -497,6 +504,10 @@ class Batch implements BatchInterface
         $bindings = [];
 
         foreach ($conditions as $column => $value) {
+            if (is_array($value)) {
+                throw new InvalidArgumentException("The value to match \"{$column}\" on must be a single value, not an array.");
+            }
+
             if (is_null($value)) {
                 $sql[] = $grammar->wrap($column) . ' IS NULL';
             } else {
@@ -520,6 +531,13 @@ class Batch implements BatchInterface
 
         if ($value instanceof Expression) {
             return [(string) $grammar->getValue($value), []];
+        }
+
+        // Enums are stored by value, like Eloquent and the query builder do.
+        if ($value instanceof \BackedEnum) {
+            $value = $value->value;
+        } elseif ($value instanceof \UnitEnum) {
+            $value = $value->name;
         }
 
         return ['?', [$value]];
@@ -564,8 +582,12 @@ class Batch implements BatchInterface
     /**
      * Make sure every row carries the columns used to match it.
      */
-    private function assertHasConditions(array $row, array $columns): void
+    private function assertHasConditions($row, array $columns): void
     {
+        if (!is_array($row)) {
+            throw new InvalidArgumentException('Every row must be an array of column => value pairs.');
+        }
+
         foreach ($columns as $column) {
             if (!array_key_exists($column, $row)) {
                 throw new InvalidArgumentException("Every row must contain a value for the \"{$column}\" column.");

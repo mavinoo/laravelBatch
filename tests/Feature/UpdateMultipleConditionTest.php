@@ -4,6 +4,7 @@ namespace Mavinoo\Batch\Tests\Feature;
 
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
+use Mavinoo\Batch\Tests\Fixtures\Status;
 use Mavinoo\Batch\Tests\Fixtures\User;
 use Mavinoo\Batch\Tests\TestCase;
 
@@ -145,6 +146,26 @@ class UpdateMultipleConditionTest extends TestCase
         $this->assertSame('two', $this->row(2)->name);
         $this->assertSame('three', $this->row(3)->name);
         $this->assertSame('333', $this->row(3)->phone);
+    }
+
+    public function test_array_condition_value_throws(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->batch()->updateMultipleCondition(new User, [
+            ['conditions' => ['id' => 1, 'name' => ['name1', 'x']], 'columns' => ['phone' => '1']],
+        ]);
+    }
+
+    public function test_enums_in_conditions_and_columns(): void
+    {
+        DB::table('users')->where('id', 1)->update(['name' => 'active']);
+
+        $this->batch()->updateMultipleCondition(new User, [
+            ['conditions' => ['id' => 1, 'name' => Status::Active], 'columns' => ['name' => Status::Blocked]],
+        ]);
+
+        $this->assertSame('blocked', $this->row(1)->name);
     }
 
     public function test_item_without_conditions_or_columns_throws(): void

@@ -6,7 +6,9 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
+use Mavinoo\Batch\Tests\Fixtures\Size;
 use Mavinoo\Batch\Tests\Fixtures\SmallBatch;
+use Mavinoo\Batch\Tests\Fixtures\Status;
 use Mavinoo\Batch\Tests\Fixtures\User;
 use Mavinoo\Batch\Tests\Fixtures\UserWithoutTimestamps;
 use Mavinoo\Batch\Tests\TestCase;
@@ -74,6 +76,45 @@ class UpdateTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
 
         $this->batch()->update(new User, [['id' => 1, 'name' => 'a'], ['name' => 'b']]);
+    }
+
+    public function test_row_that_is_not_an_array_throws(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->batch()->update(new User, [['id' => 1, 'name' => 'a'], 'oops']);
+    }
+
+    public function test_array_as_index_value_throws(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->batch()->update(new User, [['id' => [1, 2], 'name' => 'a']]);
+    }
+
+    public function test_enum_values_are_stored_by_value(): void
+    {
+        DB::table('users')->where('id', 2)->update(['name' => 'active']);
+
+        $this->batch()->update(new User, [
+            ['id' => 1, 'name' => Status::Blocked, 'phone' => Size::Large],
+            ['id' => 2, 'name' => Status::Active], // unchanged
+        ]);
+
+        $this->assertSame('blocked', $this->row(1)->name);
+        $this->assertSame('Large', $this->row(1)->phone);
+        $this->assertSame(self::NOW, (string) $this->row(1)->updated_at);
+        $this->assertSame(self::OLD, (string) $this->row(2)->updated_at);
+    }
+
+    public function test_duplicate_index_rows_apply_the_first_one(): void
+    {
+        $this->batch()->update(new User, [
+            ['id' => 1, 'name' => 'first'],
+            ['id' => 1, 'name' => 'second'],
+        ]);
+
+        $this->assertSame('first', $this->row(1)->name);
     }
 
     public function test_string_values_are_stored_literally(): void
