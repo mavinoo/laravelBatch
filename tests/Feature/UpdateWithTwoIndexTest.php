@@ -60,7 +60,7 @@ class UpdateWithTwoIndexTest extends TestCase
         $this->assertSame(self::NOW, (string) $this->row(1)->updated_at);
         $this->assertSame(self::OLD, (string) $this->row(3)->updated_at);
 
-        $this->batch()->updateWithTwoIndex(new User, [['id' => 2, 'org' => 2, 'balance' => 'balance + 1']], 'id', 'org', true);
+        $this->batch()->updateWithTwoIndex(new User, [['id' => 2, 'org' => 2, 'balance' => DB::raw('balance + 1')]], 'id', 'org');
 
         $this->assertEquals(101, $this->row(2)->balance);
     }
@@ -79,8 +79,15 @@ class UpdateWithTwoIndexTest extends TestCase
         $this->batch()->updateWithTwoIndex(new User, [['id' => 1, 'name' => 'x']], 'id', 'org');
     }
 
-    public function test_returns_false_without_values(): void
+    public function test_returns_zero_without_values(): void
     {
-        $this->assertFalse($this->batch()->updateWithTwoIndex(new User, [], 'id', 'org'));
+        $this->assertSame(0, $this->batch()->updateWithTwoIndex(new User, [], 'id', 'org'));
+    }
+
+    public function test_the_removed_raw_flag_fails_loudly(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->batch()->updateWithTwoIndex(new User, [['id' => 1, 'org' => 1, 'name' => 'x']], 'id', 'org', true);
     }
 }

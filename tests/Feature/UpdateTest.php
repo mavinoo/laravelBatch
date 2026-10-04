@@ -55,9 +55,9 @@ class UpdateTest extends TestCase
         $this->assertSame('third', $this->row(3)->name);
     }
 
-    public function test_returns_false_without_values(): void
+    public function test_returns_zero_without_values(): void
     {
-        $this->assertFalse($this->batch()->update(new User, []));
+        $this->assertSame(0, $this->batch()->update(new User, []));
     }
 
     public function test_returns_zero_when_rows_only_contain_the_index(): void
@@ -160,34 +160,60 @@ class UpdateTest extends TestCase
 
     public function test_arithmetic_needs_two_values(): void
     {
-        $this->expectException(\ArgumentCountError::class);
+        $this->expectException(InvalidArgumentException::class);
 
         $this->batch()->update(new User, [['id' => 1, 'balance' => ['+']]]);
     }
 
     public function test_arithmetic_needs_a_known_operator(): void
     {
-        $this->expectException(\TypeError::class);
+        $this->expectException(InvalidArgumentException::class);
 
         $this->batch()->update(new User, [['id' => 1, 'balance' => ['^', 2]]]);
     }
 
     public function test_arithmetic_needs_a_numeric_operand(): void
     {
-        $this->expectException(\TypeError::class);
+        $this->expectException(InvalidArgumentException::class);
 
         $this->batch()->update(new User, [['id' => 1, 'balance' => ['+', '1; DROP TABLE users']]]);
     }
 
-    public function test_raw_values_are_used_as_sql_expressions(): void
+    public function test_db_raw_values_are_used_as_sql(): void
     {
         $this->batch()->update(new User, [
-            ['id' => 1, 'balance' => 'balance * 2'],
-            ['id' => 2, 'name' => null],
-        ], 'id', true);
+            ['id' => 1, 'balance' => DB::raw('balance * 2'), 'name' => 'raw'],
+            ['id' => 2, 'balance' => DB::raw('3 * 4')],
+            ['id' => 3, 'name' => 'balance * 2'], // a plain string stays a string
+        ]);
 
         $this->assertEquals(200, $this->row(1)->balance);
-        $this->assertNull($this->row(2)->name);
+        $this->assertSame('raw', $this->row(1)->name);
+        $this->assertEquals(12, $this->row(2)->balance);
+        $this->assertSame('balance * 2', $this->row(3)->name);
+        $this->assertSame(self::NOW, (string) $this->row(2)->updated_at);
+    }
+
+    public function test_db_raw_in_the_index_value(): void
+    {
+        $this->batch()->update(new User, [['id' => DB::raw('1 + 1'), 'name' => 'two']]);
+
+        $this->assertSame('two', $this->row(2)->name);
+    }
+
+    public function test_the_removed_raw_flag_fails_loudly(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('DB::raw()');
+
+        $this->batch()->update(new User, [['id' => 1, 'balance' => 'balance * 2']], 'id', true);
+    }
+
+    public function test_a_false_raw_flag_is_ignored(): void
+    {
+        $this->batch()->update(new User, [['id' => 1, 'name' => 'x']], 'id', false);
+
+        $this->assertSame('x', $this->row(1)->name);
     }
 
     public function test_updated_at_only_changes_for_rows_that_change(): void

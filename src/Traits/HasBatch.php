@@ -37,13 +37,13 @@ trait HasBatch
      *
      * @param  array  $values
      * @param  string|null  $index
-     * @param  bool  $raw
      *
-     * @return bool|int
+     * @return int number of affected rows
      */
-    public static function batchUpdate(array $values, ?string $index = null, bool $raw = false)
+    public static function batchUpdate(array $values, ?string $index = null): int
     {
-        return app(Batch::class)->update(new static, $values, $index, $raw);
+        // Extra arguments are passed on so a leftover v2 $raw flag fails loudly.
+        return app(Batch::class)->update(new static, $values, $index, ...array_slice(func_get_args(), 2));
     }
 
     /**
@@ -51,9 +51,8 @@ trait HasBatch
      *
      * @param  array  $arrays
      * @param  string|null  $keyName
-     * @param  bool  $raw
      *
-     * @return bool|int
+     * @return int number of affected rows
      * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
      *
      * @desc
@@ -83,9 +82,9 @@ trait HasBatch
      * ];
      * $keyName = 'id';
      */
-    public function updateMultipleCondition(array $arrays, ?string $keyName = null, bool $raw = false)
+    public function updateMultipleCondition(array $arrays, ?string $keyName = null): int
     {
-        return app(Batch::class)->updateMultipleCondition(new static, $arrays, $keyName, $raw);
+        return app(Batch::class)->updateMultipleCondition(new static, $arrays, $keyName, ...array_slice(func_get_args(), 2));
     }
 
     /**
@@ -135,9 +134,9 @@ trait HasBatch
      * @param  int  $batchSize
      * @param  bool  $insertIgnore
      *
-     * @return bool|array
+     * @return array{totalRows: int, totalBatch: int, totalQuery: int}
      */
-    public static function batchInsert(array $columns, array $values, int $batchSize = 500, bool $insertIgnore = false)
+    public static function batchInsert(array $columns, array $values, int $batchSize = 500, bool $insertIgnore = false): array
     {
         return app(Batch::class)->insert(new static, $columns, $values, $batchSize, $insertIgnore);
     }

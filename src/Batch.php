@@ -2,6 +2,7 @@
 
 namespace Mavinoo\Batch;
 
+use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\DatabaseManager;
@@ -36,44 +37,28 @@ class Batch implements BatchInterface
     }
 
     /**
-     * <h2>Update multiple rows.</h2>
+     * Update many rows, matched on one column, in a single query.
      *
-     * Example:<br>
+     * Example:
      * ```
-     * $userInstance = new \App\Models\User;
-     * $value = [
-     *     [
-     *         'id' => 1,
-     *         'status' => 'active',
-     *         'nickname' => 'Mohammad'
-     *     ],
-     *     [
-     *         'id' => 5,
-     *         'status' => 'deactive',
-     *         'nickname' => 'Ghanbari'
-     *     ],
-     *     [
-     *         'id' => 7,
-     *         'balance' => ['+', 500]
-     *     ]
-     * ];
-     * $index = 'id';
-     * Batch::update($userInstance, $value, $index);
+     * Batch::update(new User, [
+     *     ['id' => 1, 'status' => 'active', 'nickname' => 'Mohammad'],
+     *     ['id' => 5, 'status' => 'deactive'],
+     *     ['id' => 7, 'balance' => ['+', 500]],          // arithmetic: + - * / %
+     *     ['id' => 9, 'seen_at' => DB::raw('NOW()')],    // raw SQL for one value
+     * ], 'id');
      * ```
      *
      * @param Model $table
-     * @param array $values
-     * @param string $index
-     * @param bool $raw
-     * @return bool|int
-     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
-     * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
+     * @param array $values rows, each holding the index value and the columns to set
+     * @param string|null $index column to match rows on, defaults to the primary key
+     * @return int number of affected rows
+     *
+     * @throws InvalidArgumentException when a row has no index value or an arithmetic array is invalid
      */
-    public function update(Model $table, array $values, ?string $index = null, bool $raw = false)
+    public function update(Model $table, array $values, ?string $index = null): int
     {
-        if (!count($values)) {
-            return false;
-        }
+        $this->rejectRawArgument(func_get_args(), 3);
 
         if (!isset($index) || empty($index)) {
             $index = $table->getKeyName();
@@ -89,44 +74,31 @@ class Batch implements BatchInterface
             $entries[] = ['conditions' => $conditions, 'columns' => $row];
         }
 
-        return $this->runCaseUpdate($table, $entries, [$index], $raw);
+        return $this->runCaseUpdate($table, $entries, [$index]);
     }
 
     /**
-     * Update multiple rows
+     * Update many rows, matched on two columns, in a single query.
+     *
+     * Example:
+     * ```
+     * Batch::updateWithTwoIndex(new Membership, [
+     *     ['user_id' => 1, 'team_id' => 3, 'role' => 'admin'],
+     *     ['user_id' => 2, 'team_id' => 3, 'role' => 'member'],
+     * ], 'user_id', 'team_id');
+     * ```
+     *
      * @param Model $table
-     * @param array $values
-     * @param string $index
-     * @param string|null $index2
-     * @param bool $raw
-     * @return bool|int
-     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
-     * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
+     * @param array $values rows, each holding both index values and the columns to set
+     * @param string|null $index first column to match on, defaults to the primary key
+     * @param string|null $index2 second column to match on
+     * @return int number of affected rows
      *
-     * @desc
-     * Example
-     * $table = 'users';
-     * $value = [
-     *     [
-     *         'id' => 1,
-     *         'status' => 'active',
-     *         'nickname' => 'Mohammad'
-     *     ] ,
-     *     [
-     *         'id' => 5,
-     *         'status' => 'deactive',
-     *         'nickname' => 'Ghanbari'
-     *     ] ,
-     * ];
-     * $index = 'id';
-     * $index2 = 'user_id';
-     *
+     * @throws InvalidArgumentException when $index2 is missing, a row lacks an index value or an arithmetic array is invalid
      */
-    public function updateWithTwoIndex(Model $table, array $values, ?string $index = null, ?string $index2 = null, bool $raw = false)
+    public function updateWithTwoIndex(Model $table, array $values, ?string $index = null, ?string $index2 = null): int
     {
-        if (!count($values)) {
-            return false;
-        }
+        $this->rejectRawArgument(func_get_args(), 4);
 
         if (!isset($index) || empty($index)) {
             $index = $table->getKeyName();
@@ -146,140 +118,99 @@ class Batch implements BatchInterface
             $entries[] = ['conditions' => $conditions, 'columns' => $row];
         }
 
-        return $this->runCaseUpdate($table, $entries, [$index, $index2], $raw);
+        return $this->runCaseUpdate($table, $entries, [$index, $index2]);
     }
 
     /**
-     * Update multiple condition rows
+     * Update many rows, each matched on its own set of conditions, in a single query.
      *
-     * @param  Model  $table
-     * @param  array  $arrays
-     * @param  string|null  $keyName
-     * @param  bool  $raw
+     * Every item must include the $index column in its conditions. On MySQL / MariaDB,
+     * two condition columns that are both updated and used in each other's conditions
+     * can't be updated in one call, because MySQL assigns columns one after another.
      *
-     * @return bool|int
-     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
+     * Example:
+     * ```
+     * Batch::updateMultipleCondition(new User, [
+     *     ['conditions' => ['id' => 1, 'status' => 'active'], 'columns' => ['status' => 'invalid', 'nickname' => 'mohammad']],
+     *     ['conditions' => ['id' => 2], 'columns' => ['nickname' => 'mavinoo']],
+     * ], 'id');
+     * ```
      *
-     * @desc
-     * Example
-     * $table = new \App\Models\User;
-     * $arrays = [
-     *      [
-     *          'conditions' => ['id' => 1, 'status' => 'active'],
-     *          'columns'    => [
-     *              'status' => 'invalid'
-     *              'nickname' => 'mohammad'
-     *          ],
-     *      ],
-     *      [
-     *          'conditions' => ['id' => 2],
-     *          'columns'    => [
-     *              'nickname' => 'mavinoo',
-     *              'name' => 'mohammad',
-     *          ],
-     *      ],
-     *      [
-     *          'conditions' => ['id' => 3],
-     *          'columns'    => [
-     *              'nickname' => 'ali'
-     *          ],
-     *      ],
-     * ];
-     * $keyName = 'id';
+     * @param Model $table
+     * @param array $values items of ['conditions' => [column => value], 'columns' => [column => value]]
+     * @param string|null $index column every item's conditions include, defaults to the primary key
+     * @return int number of affected rows
+     *
+     * @throws InvalidArgumentException when an item is malformed or the update can't be ordered safely on MySQL
      */
-    public function updateMultipleCondition(Model $table, array $arrays, ?string $keyName = null, bool $raw = false)
+    public function updateMultipleCondition(Model $table, array $values, ?string $index = null): int
     {
-        if (!count($arrays)) {
-            return false;
-        }
+        $this->rejectRawArgument(func_get_args(), 3);
 
-        if (!isset($keyName) || empty($keyName)) {
-            $keyName = $table->getKeyName();
+        if (!isset($index) || empty($index)) {
+            $index = $table->getKeyName();
         }
 
         $entries = [];
-        foreach ($arrays as $array) {
-            if (!isset($array['conditions'], $array['columns']) || !is_array($array['conditions']) || !is_array($array['columns'])) {
+        foreach ($values as $item) {
+            if (!isset($item['conditions'], $item['columns']) || !is_array($item['conditions']) || !is_array($item['columns'])) {
                 throw new InvalidArgumentException('Each item needs a "conditions" array and a "columns" array.');
             }
 
-            $this->assertHasConditions($array['conditions'], [$keyName]);
+            $this->assertHasConditions($item['conditions'], [$index]);
 
-            $entries[] = ['conditions' => $array['conditions'], 'columns' => $array['columns']];
+            $entries[] = ['conditions' => $item['conditions'], 'columns' => $item['columns']];
         }
 
-        return $this->runCaseUpdate($table, $entries, [$keyName], $raw);
+        return $this->runCaseUpdate($table, $entries, [$index]);
     }
 
     /**
-     * Insert Multi rows.
+     * Insert many rows, $batchSize rows per query, in one transaction.
+     *
+     * Example:
+     * ```
+     * Batch::insert(new User, ['name', 'email'], [
+     *     ['Mohammad', 'mohammad@example.com'],
+     *     ['Saeed', 'saeed@example.com'],
+     * ], 500);
+     * ```
      *
      * @param Model $table
-     * @param array $columns
-     * @param array $values
-     * @param int $batchSize
-     * @param bool $insertIgnore
-     * @return bool|mixed
-     * @throws \Throwable
-     * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
-     * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
-     * @desc
-     * Example
+     * @param array $columns column names
+     * @param array $values rows, each a list of values in the same order as $columns
+     * @param int $batchSize rows per query (at least 100)
+     * @param bool $insertIgnore skip rows that hit a unique key (not supported on SQL Server)
+     * @return array{totalRows: int, totalBatch: int, totalQuery: int}
      *
-     * $table = 'users';
-     * $columns = [
-     *      'firstName',
-     *      'lastName',
-     *      'email',
-     *      'isActive',
-     *      'status',
-     * ];
-     * $values = [
-     *     [
-     *         'Mohammad',
-     *         'Ghanbari',
-     *         'emailSample_1@gmail.com',
-     *         '1',
-     *         '0',
-     *     ] ,
-     *     [
-     *         'Saeed',
-     *         'Mohammadi',
-     *         'emailSample_2@gmail.com',
-     *         '1',
-     *         '0',
-     *     ] ,
-     *     [
-     *         'Avin',
-     *         'Ghanbari',
-     *         'emailSample_3@gmail.com',
-     *         '1',
-     *         '0',
-     *     ] ,
-     * ];
-     * $batchSize = 500; // insert 500 (default), 100 minimum rows in one query
+     * @throws InvalidArgumentException when a row doesn't have one value per column
      */
-    public function insert(Model $table, array $columns, array $values, int $batchSize = 500, bool $insertIgnore = false)
+    public function insert(Model $table, array $columns, array $values, int $batchSize = 500, bool $insertIgnore = false): array
     {
-        if (!count($columns) || !count($values)) {
-            return false;
+        $minChunck = 100;
+
+        $totalValues = count($values);
+        $batchSizeInsert = ($totalValues < $batchSize && $batchSize < $minChunck) ? $minChunck : $batchSize;
+
+        $totalChunk = ($batchSizeInsert < $minChunck) ? $minChunck : $batchSizeInsert;
+
+        if (!$totalValues) {
+            return ['totalRows' => 0, 'totalBatch' => $totalChunk, 'totalQuery' => 0];
         }
 
         $rows = [];
-        foreach ($values as $row) {
-            if (!is_array($row) || count($row) !== count($columns)) {
-                return false;
+        foreach (array_values($values) as $i => $row) {
+            if (!is_array($row) || count($row) !== count($columns) || !count($columns)) {
+                throw new InvalidArgumentException(sprintf(
+                    'Row %d has %d values, but there are %d columns.',
+                    $i,
+                    is_array($row) ? count($row) : 0,
+                    count($columns)
+                ));
             }
 
             $rows[] = array_combine($columns, array_values($row));
         }
-
-        $minChunck = 100;
-
-        $totalValues = count($rows);
-        $batchSizeInsert = ($totalValues < $batchSize && $batchSize < $minChunck) ? $minChunck : $batchSize;
-
-        $totalChunk = ($batchSizeInsert < $minChunck) ? $minChunck : $batchSizeInsert;
 
         if ($table->usesTimestamps()) {
             $now = Carbon::now()->format($table->getDateFormat());
@@ -325,10 +256,9 @@ class Batch implements BatchInterface
      * @param Model $model
      * @param array $entries list of ['conditions' => [col => value], 'columns' => [col => value]]
      * @param array $whereColumns condition columns used to limit the rows in the WHERE clause
-     * @param bool $raw insert non-null values verbatim as SQL expressions instead of binding them
      * @return int number of affected rows
      */
-    private function runCaseUpdate(Model $model, array $entries, array $whereColumns, bool $raw): int
+    private function runCaseUpdate(Model $model, array $entries, array $whereColumns): int
     {
         $connection = $this->db->connection($this->getConnectionName($model));
         $grammar = $connection->getQueryGrammar();
@@ -347,7 +277,7 @@ class Batch implements BatchInterface
         $chunkCost = 0;
 
         foreach ($entries as $entry) {
-            $compiled = $this->compileEntry($grammar, $entry, $updatedAtColumn, $timestampValue, $raw);
+            $compiled = $this->compileEntry($grammar, $entry, $updatedAtColumn, $timestampValue);
             $cost = $compiled['cost'] + count($whereColumns);
 
             if ($chunk && $chunkCost + $cost > $limit) {
@@ -386,7 +316,7 @@ class Batch implements BatchInterface
     /**
      * Compile the CASE branches contributed by a single row.
      */
-    private function compileEntry(Grammar $grammar, array $entry, ?string $updatedAtColumn, ?string $timestampValue, bool $raw): array
+    private function compileEntry(Grammar $grammar, array $entry, ?string $updatedAtColumn, ?string $timestampValue): array
     {
         [$whenSql, $whenBindings] = $this->compileConditions($grammar, $entry['conditions']);
 
@@ -401,7 +331,7 @@ class Batch implements BatchInterface
             if ($column === $updatedAtColumn) {
                 // An explicit non-null updated_at wins over the automatic timestamp.
                 if (!is_null($value)) {
-                    [$valueSql, $valueBindings] = $this->compileValue($value, $raw);
+                    [$valueSql, $valueBindings] = $this->compileValue($grammar, $value);
                     $touch = ['WHEN ' . $whenSql . ' THEN ' . $valueSql, array_merge($whenBindings, $valueBindings)];
                 }
                 continue;
@@ -413,7 +343,7 @@ class Batch implements BatchInterface
                 $valueBindings = [];
                 $changes[] = $wrapped . ' IS NOT NULL';
             } else {
-                [$valueSql, $valueBindings] = $this->compileValue($value, $raw);
+                [$valueSql, $valueBindings] = $this->compileValue($grammar, $value);
 
                 // Null-safe "value actually changes" check, used for the automatic timestamp.
                 if (is_null($value)) {
@@ -499,12 +429,14 @@ class Batch implements BatchInterface
 
         $wheres = [];
         foreach ($whereColumns as $whereColumn) {
-            $ids = array_map(function ($compiled) use ($whereColumn) {
-                return $compiled['conditions'][$whereColumn];
-            }, $chunk);
+            $ids = [];
+            foreach ($chunk as $compiled) {
+                [$idSql, $idBindings] = $this->compileValue($grammar, $compiled['conditions'][$whereColumn]);
+                $ids[] = $idSql;
+                array_push($bindings, ...$idBindings);
+            }
 
-            $wheres[] = $grammar->wrap($whereColumn) . ' IN (' . implode(', ', array_fill(0, count($ids), '?')) . ')';
-            array_push($bindings, ...$ids);
+            $wheres[] = $grammar->wrap($whereColumn) . ' IN (' . implode(', ', $ids) . ')';
         }
 
         $sql = 'UPDATE ' . $grammar->wrapTable($model->getTable())
@@ -568,8 +500,9 @@ class Batch implements BatchInterface
             if (is_null($value)) {
                 $sql[] = $grammar->wrap($column) . ' IS NULL';
             } else {
-                $sql[] = $grammar->wrap($column) . ' = ?';
-                $bindings[] = $value;
+                [$valueSql, $valueBindings] = $this->compileValue($grammar, $value);
+                $sql[] = $grammar->wrap($column) . ' = ' . $valueSql;
+                array_push($bindings, ...$valueBindings);
             }
         }
 
@@ -577,16 +510,16 @@ class Batch implements BatchInterface
     }
 
     /**
-     * Compile a value to a placeholder, or to verbatim SQL in raw mode.
+     * Compile a value to a placeholder, or to its SQL when it's a DB::raw() expression.
      */
-    private function compileValue($value, bool $raw): array
+    private function compileValue(Grammar $grammar, $value): array
     {
         if (is_null($value)) {
             return ['NULL', []];
         }
 
-        if ($raw) {
-            return [is_bool($value) ? (string) (int) $value : (string) $value, []];
+        if ($value instanceof Expression) {
+            return [(string) $grammar->getValue($value), []];
         }
 
         return ['?', [$value]];
@@ -599,21 +532,33 @@ class Batch implements BatchInterface
     {
         // If array has two values
         if (!array_key_exists(0, $value) || !array_key_exists(1, $value)) {
-            throw new \ArgumentCountError('Increment/Decrement array needs to have 2 values, a math operator (+, -, *, /, %) and a number');
+            throw new InvalidArgumentException('Increment/Decrement array needs to have 2 values, a math operator (+, -, *, /, %) and a number');
         }
         // Check first value
         if (gettype($value[0]) != 'string' || !in_array($value[0], ['+', '-', '*', '/', '%'])) {
-            throw new \TypeError('First value in Increment/Decrement array needs to be a string and a math operator (+, -, *, /, %)');
+            throw new InvalidArgumentException('First value in Increment/Decrement array needs to be a string and a math operator (+, -, *, /, %)');
         }
         // Check second value
         if (!is_numeric($value[1]) || !is_finite((float) $value[1])) {
-            throw new \TypeError('Second value in Increment/Decrement array needs to be numeric');
+            throw new InvalidArgumentException('Second value in Increment/Decrement array needs to be numeric');
         }
 
         $number = $value[1] + 0;
 
         // Parenthesised so a negative operand can never form a "--" comment.
         return '(' . (is_int($number) ? (string) $number : var_export($number, true)) . ')';
+    }
+
+    /**
+     * The $raw flag was removed in 3.0. Fail loudly instead of silently storing SQL as text.
+     */
+    private function rejectRawArgument(array $arguments, int $position): void
+    {
+        if (($arguments[$position] ?? false) === true) {
+            throw new InvalidArgumentException(
+                'The $raw argument was removed in laravel-batch 3.0. Wrap raw SQL values in DB::raw() instead.'
+            );
+        }
     }
 
     /**

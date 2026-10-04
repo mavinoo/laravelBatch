@@ -83,8 +83,8 @@ class UpdateMultipleConditionTest extends TestCase
             ['conditions' => ['id' => 1], 'columns' => ['balance' => ['+', 10], 'name' => null]],
         ]);
         $this->batch()->updateMultipleCondition(new User, [
-            ['conditions' => ['id' => 2], 'columns' => ['balance' => 'balance - 1']],
-        ], 'id', true);
+            ['conditions' => ['id' => 2], 'columns' => ['balance' => DB::raw('balance - 1')]],
+        ], 'id');
 
         $this->assertEquals(110, $this->row(1)->balance);
         $this->assertNull($this->row(1)->name);
@@ -163,8 +163,24 @@ class UpdateMultipleConditionTest extends TestCase
         ], 'id');
     }
 
-    public function test_returns_false_without_values(): void
+    public function test_returns_zero_without_values(): void
     {
-        $this->assertFalse($this->batch()->updateMultipleCondition(new User, []));
+        $this->assertSame(0, $this->batch()->updateMultipleCondition(new User, []));
+    }
+
+    public function test_db_raw_in_conditions(): void
+    {
+        $this->batch()->updateMultipleCondition(new User, [
+            ['conditions' => ['id' => 3, 'balance' => DB::raw('50 + 50')], 'columns' => ['name' => 'matched']],
+        ]);
+
+        $this->assertSame('matched', $this->row(3)->name);
+    }
+
+    public function test_the_removed_raw_flag_fails_loudly(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->batch()->updateMultipleCondition(new User, [['conditions' => ['id' => 1], 'columns' => ['name' => 'x']]], 'id', true);
     }
 }

@@ -2,6 +2,8 @@
 
 namespace Mavinoo\Batch\Tests\Feature;
 
+use Illuminate\Support\Facades\DB;
+use InvalidArgumentException;
 use Mavinoo\Batch\Tests\Fixtures\User;
 use Mavinoo\Batch\Tests\TestCase;
 
@@ -38,11 +40,11 @@ class HasBatchTest extends TestCase
         $this->assertEquals(101, $this->row(3)->balance);
     }
 
-    public function test_batch_update_with_index_and_raw(): void
+    public function test_batch_update_with_index_and_db_raw(): void
     {
         $this->seedUsers();
 
-        User::batchUpdate([['code' => 'c2', 'balance' => 'balance * 3']], 'code', true);
+        User::batchUpdate([['code' => 'c2', 'balance' => DB::raw('balance * 3')]], 'code');
 
         $this->assertEquals(300, $this->row(2)->balance);
     }
@@ -58,5 +60,14 @@ class HasBatchTest extends TestCase
 
         $this->assertSame('ali', $this->row(1)->name);
         $this->assertSame('name2', $this->row(2)->name);
+    }
+
+    public function test_the_removed_raw_flag_fails_loudly(): void
+    {
+        $this->seedUsers();
+
+        $this->expectException(InvalidArgumentException::class);
+
+        User::batchUpdate([['id' => 1, 'balance' => 'balance * 3']], 'id', true);
     }
 }

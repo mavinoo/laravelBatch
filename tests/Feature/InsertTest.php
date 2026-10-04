@@ -3,6 +3,10 @@
 namespace Mavinoo\Batch\Tests\Feature;
 
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
+use InvalidArgumentException;
+use Mavinoo\Batch\Tests\Fixtures\NoCreatedAtUser;
+use Mavinoo\Batch\Tests\Fixtures\NoUpdatedAtUser;
 use Mavinoo\Batch\Tests\Fixtures\SmallBatch;
 use Mavinoo\Batch\Tests\Fixtures\User;
 use Mavinoo\Batch\Tests\Fixtures\UserWithoutTimestamps;
@@ -101,17 +105,55 @@ class InsertTest extends TestCase
         $this->assertSame(25, $this->countRows());
     }
 
-    public function test_returns_false_when_a_row_has_the_wrong_column_count(): void
+    public function test_a_row_with_the_wrong_column_count_throws(): void
     {
-        $this->assertFalse($this->batch()->insert(new User, ['id', 'code'], [[1]]));
-        $this->assertFalse($this->batch()->insert(new User, ['id', 'code'], [[1, 'c1'], [2, 'c2', 'extra']]));
+        foreach ([[[1]], [[1, 'c1'], [2, 'c2', 'extra']], [['not-an-array']]] as $values) {
+            try {
+                $this->batch()->insert(new User, ['id', 'code'], $values);
+                $this->fail('Expected an InvalidArgumentException.');
+            } catch (InvalidArgumentException $e) {
+                $this->assertStringContainsString('columns', $e->getMessage());
+            }
+        }
+
         $this->assertSame(0, $this->countRows());
     }
 
-    public function test_returns_false_without_values_or_columns(): void
+    public function test_rows_without_columns_throw(): void
     {
-        $this->assertFalse($this->batch()->insert(new User, ['id'], []));
-        $this->assertFalse($this->batch()->insert(new User, [], [[1]]));
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->batch()->insert(new User, [], [[1]]);
+    }
+
+    public function test_no_rows_inserts_nothing(): void
+    {
+        $queries = $this->writeQueries(function () {
+            $this->assertSame(['totalRows' => 0, 'totalBatch' => 500, 'totalQuery' => 0], $this->batch()->insert(new User, ['id'], []));
+        });
+
+        $this->assertCount(0, $queries);
+    }
+
+    public function test_db_raw_values(): void
+    {
+        $this->batch()->insert(new User, ['id', 'code', 'balance'], [[1, 'c1', DB::raw('6 * 7')]]);
+
+        $this->assertEquals(42, $this->row(1)->balance);
+    }
+
+    public function test_models_without_one_timestamp_column(): void
+    {
+        // https://github.com/mavinoo/laravelBatch/issues/107
+        $this->batch()->insert(new NoUpdatedAtUser, ['id', 'code'], [[1, 'c1']]);
+        $this->batch()->insert(new NoCreatedAtUser, ['id', 'code'], [[2, 'c2']]);
+        $this->batch()->update(new NoUpdatedAtUser, [['id' => 1, 'name' => 'x']]);
+
+        $this->assertSame(self::NOW, (string) $this->row(1)->created_at);
+        $this->assertNull($this->row(1)->updated_at);
+        $this->assertSame('x', $this->row(1)->name);
+        $this->assertNull($this->row(2)->created_at);
+        $this->assertSame(self::NOW, (string) $this->row(2)->updated_at);
     }
 
     public function test_insert_ignore_skips_duplicates(): void
