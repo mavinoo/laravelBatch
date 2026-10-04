@@ -89,6 +89,7 @@ abstract class TestCase extends Orchestra
                 $table->integer('balance')->default(100);
                 $table->text('meta')->nullable();
                 $table->timestamps();
+                $table->softDeletes();
             });
         }
 
@@ -124,6 +125,13 @@ abstract class TestCase extends Orchestra
 
         foreach (array_chunk($rows, 100) as $chunk) {
             DB::connection($connection)->table('users')->insert($chunk);
+        }
+
+        // PostgreSQL doesn't move the id sequence past explicitly inserted ids.
+        $db = DB::connection($connection);
+        if ($count && $db->getDriverName() === 'pgsql') {
+            $table = $db->getTablePrefix() . 'users';
+            $db->statement("select setval(pg_get_serial_sequence('{$table}', 'id'), (select max(id) from {$table}))");
         }
     }
 

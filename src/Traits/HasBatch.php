@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 namespace Mavinoo\Batch\Traits;
 
+use Illuminate\Database\Eloquent\Model;
 use Mavinoo\Batch\Batch;
 
+/**
+ * @phpstan-require-extends Model
+ */
 trait HasBatch
 {
     /**
@@ -35,7 +39,7 @@ trait HasBatch
      * User::batchUpdate($values, 'id');
      * ```
      *
-     * @param  array  $values
+     * @param  array<array-key, mixed>  $values
      * @param  string|null  $index
      *
      * @return int number of affected rows
@@ -43,17 +47,18 @@ trait HasBatch
     public static function batchUpdate(array $values, ?string $index = null): int
     {
         // Extra arguments are passed on so a leftover v2 $raw flag fails loudly.
-        return app(Batch::class)->update(new static, $values, $index, ...array_slice(func_get_args(), 2));
+        return app(Batch::class)->update(self::batchModel(), $values, $index, ...array_slice(func_get_args(), 2));
     }
 
     /**
      * Update multiple condition rows
      *
-     * @param  array  $arrays
+     * @param  array<array-key, mixed>  $arrays
      * @param  string|null  $keyName
      *
      * @return int number of affected rows
      * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
+     * @deprecated since 3.1, use the static batchUpdateMultipleCondition(). Will be removed in 4.0.
      *
      * @desc
      * Example
@@ -84,7 +89,7 @@ trait HasBatch
      */
     public function updateMultipleCondition(array $arrays, ?string $keyName = null): int
     {
-        return app(Batch::class)->updateMultipleCondition(new static, $arrays, $keyName, ...array_slice(func_get_args(), 2));
+        return app(Batch::class)->updateMultipleCondition(self::batchModel(), $arrays, $keyName, ...array_slice(func_get_args(), 2));
     }
 
     /**
@@ -129,8 +134,8 @@ trait HasBatch
      * User::batchInsert($columns, $values, $batchSize);
      * ```
      *
-     * @param  array  $columns
-     * @param  array  $values
+     * @param  array<int, string>  $columns
+     * @param  array<array-key, mixed>  $values
      * @param  int  $batchSize
      * @param  bool  $insertIgnore
      *
@@ -138,6 +143,103 @@ trait HasBatch
      */
     public static function batchInsert(array $columns, array $values, int $batchSize = 500, bool $insertIgnore = false): array
     {
-        return app(Batch::class)->insert(new static, $columns, $values, $batchSize, $insertIgnore);
+        return app(Batch::class)->insert(self::batchModel(), $columns, $values, $batchSize, $insertIgnore);
+    }
+
+    /**
+     * Update many rows, each matched on its own set of conditions.
+     *
+     * Example:
+     * ```
+     * User::batchUpdateMultipleCondition([
+     *     ['conditions' => ['id' => 1, 'status' => 'active'], 'columns' => ['status' => 'invalid']],
+     * ], 'id');
+     * ```
+     *
+     * @param  array<array-key, mixed>  $values
+     * @param  string|null  $index
+     *
+     * @return int number of affected rows
+     */
+    public static function batchUpdateMultipleCondition(array $values, ?string $index = null): int
+    {
+        return app(Batch::class)->updateMultipleCondition(self::batchModel(), $values, $index);
+    }
+
+    /**
+     * Update many rows, matched on two columns.
+     *
+     * @param  array<array-key, mixed>  $values
+     * @param  string|null  $index
+     * @param  string|null  $index2
+     *
+     * @return int number of affected rows
+     */
+    public static function batchUpdateWithTwoIndex(array $values, ?string $index = null, ?string $index2 = null): int
+    {
+        return app(Batch::class)->updateWithTwoIndex(self::batchModel(), $values, $index, $index2);
+    }
+
+    /**
+     * Update many rows, matched on any number of key columns.
+     *
+     * @param  array<array-key, mixed>  $values
+     * @param  array<array-key, mixed>  $keys
+     *
+     * @return int number of affected rows
+     */
+    public static function batchUpdateByKeys(array $values, array $keys): int
+    {
+        return app(Batch::class)->updateByKeys(self::batchModel(), $values, $keys);
+    }
+
+    /**
+     * Insert many rows given as column => value pairs.
+     *
+     * @param  array<array-key, mixed>  $rows
+     * @param  int  $batchSize
+     * @param  bool  $insertIgnore
+     *
+     * @return array{totalRows: int, totalBatch: int, totalQuery: int}
+     */
+    public static function batchInsertRows(array $rows, int $batchSize = 500, bool $insertIgnore = false): array
+    {
+        return app(Batch::class)->insertRows(self::batchModel(), $rows, $batchSize, $insertIgnore);
+    }
+
+    /**
+     * Insert rows, or update them when a row with the same $uniqueBy values already exists.
+     *
+     * @param  array<array-key, mixed>  $values
+     * @param  array<int, string>|string  $uniqueBy
+     * @param  array<array-key, mixed>|null  $update
+     *
+     * @return int number of affected rows, as reported by the database
+     */
+    public static function batchUpsert(array $values, $uniqueBy, ?array $update = null): int
+    {
+        return app(Batch::class)->upsert(self::batchModel(), $values, $uniqueBy, $update);
+    }
+
+    /**
+     * Delete many rows, matched on one or more key columns. Soft deletes unless $force is true.
+     *
+     * @param  array<array-key, mixed>  $values
+     * @param  array<array-key, mixed>  $keys
+     * @param  bool  $force
+     *
+     * @return int number of deleted (or soft-deleted) rows
+     */
+    public static function batchDeleteByKeys(array $values, array $keys, bool $force = false): int
+    {
+        return app(Batch::class)->deleteByKeys(self::batchModel(), $values, $keys, $force);
+    }
+
+    /**
+     * A fresh instance of the model, made through Eloquent so custom constructors are respected.
+     */
+    private static function batchModel(): Model
+    {
+        return static::query()->getModel();
     }
 }
