@@ -69,7 +69,7 @@ class Batch implements BatchInterface
      * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
      * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
      */
-    public function update(Model $table, array $values, string|null $index = null, bool $raw = false)
+    public function update(Model $table, array $values, ?string $index = null, bool $raw = false)
     {
         if (!count($values)) {
             return false;
@@ -122,7 +122,7 @@ class Batch implements BatchInterface
      * $index2 = 'user_id';
      *
      */
-    public function updateWithTwoIndex(Model $table, array $values, string|null $index = null, string|null $index2 = null, bool $raw = false)
+    public function updateWithTwoIndex(Model $table, array $values, ?string $index = null, ?string $index2 = null, bool $raw = false)
     {
         if (!count($values)) {
             return false;
@@ -187,7 +187,7 @@ class Batch implements BatchInterface
      * ];
      * $keyName = 'id';
      */
-    public function updateMultipleCondition(Model $table, array $arrays, string|null $keyName = null, bool $raw = false)
+    public function updateMultipleCondition(Model $table, array $arrays, ?string $keyName = null, bool $raw = false)
     {
         if (!count($arrays)) {
             return false;
