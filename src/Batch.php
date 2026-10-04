@@ -53,7 +53,7 @@ class Batch implements BatchInterface
      * @createdBy Mohammad Ghanbari <mavin.developer@gmail.com>
      * @updatedBy Ibrahim Sakr <ebrahimes@gmail.com>
      */
-    public function update(Model $table, array $values, string|null $index = null, bool $raw = false)
+    public function update(Model $table, array $values, ?string $index = null, bool $raw = false)
     {
         $final = [];
         $ids = [];
@@ -122,9 +122,9 @@ class Batch implements BatchInterface
                             }
                         } else {
                             if (Common::disableBacktick($driver)) {
-                                $changeConditions[] = '(' . $field . ' != ' . $finalField . ')';
+                                $changeConditions[] = '(' . $field . ' != ' . $finalField . ' OR ' . $field . ' IS NULL)';
                             } else {
-                                $changeConditions[] = '(`' . $field . '` != ' . $finalField . ')';
+                                $changeConditions[] = '(`' . $field . '` != ' . $finalField . ' OR `' . $field . '` IS NULL)';
                             }
                         }
                     }
@@ -137,7 +137,7 @@ class Batch implements BatchInterface
             }
 
             // Handle explicit updated_at in values
-            if (isset($val[$updatedAtColumn])) {
+            if ($updatedAtColumn && isset($val[$updatedAtColumn])) {
                 $timestampFieldValue = $raw ? Common::mysql_escape($val[$updatedAtColumn]) : "'" . Common::mysql_escape($val[$updatedAtColumn]) . "'";
                 $timestampFieldValue = (is_null($val[$updatedAtColumn]) ? 'NULL' : $timestampFieldValue);
                 
@@ -161,8 +161,12 @@ class Batch implements BatchInterface
         }
 
         // Add timestamp conditions to final array if we have any
-        if (!empty($timestampConditions) && $updatedAtColumn) {
-            $final[$updatedAtColumn] = $timestampConditions;
+        // Keep explicit updated_at values, and put updated_at first: MySQL applies SET
+        // assignments left to right, so the change checks must see the old values.
+        if ($updatedAtColumn && (isset($final[$updatedAtColumn]) || !empty($timestampConditions))) {
+            $touches = array_merge($final[$updatedAtColumn] ?? [], $timestampConditions);
+            unset($final[$updatedAtColumn]);
+            $final = [$updatedAtColumn => $touches] + $final;
         }
 
         if (Common::disableBacktick($driver)) {
@@ -220,7 +224,7 @@ class Batch implements BatchInterface
      * $index2 = 'user_id';
      *
      */
-    public function updateWithTwoIndex(Model $table, array $values, string|null $index = null, string|null $index2 = null, bool $raw = false)
+    public function updateWithTwoIndex(Model $table, array $values, ?string $index = null, ?string $index2 = null, bool $raw = false)
     {
         $final = [];
         $ids = [];
@@ -280,7 +284,7 @@ class Batch implements BatchInterface
                     } else {
                         // Only update
                         $finalField = $raw ? Common::mysql_escape($val[$field]) : "'" . Common::mysql_escape($val[$field]) . "'";
-                        $value = $this->formatSqlValue($val[$field], $raw);
+                        $value = (is_null($val[$field]) ? 'NULL' : $finalField);
                         
                         // Build condition to check if value actually changes
                         if (is_null($val[$field])) {
@@ -291,9 +295,9 @@ class Batch implements BatchInterface
                             }
                         } else {
                             if (Common::disableBacktick($driver)) {
-                                $changeConditions[] = '(' . $field . ' != ' . $finalField . ')';
+                                $changeConditions[] = '(' . $field . ' != ' . $finalField . ' OR ' . $field . ' IS NULL)';
                             } else {
-                                $changeConditions[] = '(`' . $field . '` != ' . $finalField . ')';
+                                $changeConditions[] = '(`' . $field . '` != ' . $finalField . ' OR `' . $field . '` IS NULL)';
                             }
                         }
                     }
@@ -307,7 +311,7 @@ class Batch implements BatchInterface
             }
 
             // Handle explicit updated_at in values
-            if (isset($val[$updatedAtColumn])) {
+            if ($updatedAtColumn && isset($val[$updatedAtColumn])) {
                 $timestampFieldValue = $raw ? Common::mysql_escape($val[$updatedAtColumn]) : "'" . Common::mysql_escape($val[$updatedAtColumn]) . "'";
                 $timestampFieldValue = (is_null($val[$updatedAtColumn]) ? 'NULL' : $timestampFieldValue);
                 
@@ -332,8 +336,12 @@ class Batch implements BatchInterface
         }
 
         // Add timestamp conditions to final array if we have any
-        if (!empty($timestampConditions) && $updatedAtColumn) {
-            $final[$updatedAtColumn] = $timestampConditions;
+        // Keep explicit updated_at values, and put updated_at first: MySQL applies SET
+        // assignments left to right, so the change checks must see the old values.
+        if ($updatedAtColumn && (isset($final[$updatedAtColumn]) || !empty($timestampConditions))) {
+            $touches = array_merge($final[$updatedAtColumn] ?? [], $timestampConditions);
+            unset($final[$updatedAtColumn]);
+            $final = [$updatedAtColumn => $touches] + $final;
         }
 
 
@@ -356,29 +364,6 @@ class Batch implements BatchInterface
         }
 
         return $this->db->connection($this->getConnectionName($table))->update($query);
-    }
-
-    private function formatSqlValue($value, bool $raw): string
-    {
-        // NULL
-        if ($value === null) {
-            return 'NULL';
-        }
-
-        // Numbers
-        if (is_int($value) || is_float($value) || is_numeric($value)) {
-            return (string) $value;
-        }
-
-        // Raw SQL detection (BEFORE escaping)
-        if ($raw && is_string($value)) {
-            if (preg_match('/^\s*(CASE|NOW\(|IF\(|COALESCE\(|NULLIF\(|CONCAT\(|IFNULL\(|CURRENT_)/i', $value)) {
-                return $value;
-            }
-        }
-
-        // Escape only string literals
-        return '"' . Common::mysql_escape((string) $value) . '"';
     }
 
     /**
@@ -419,7 +404,7 @@ class Batch implements BatchInterface
      * ];
      * $keyName = 'id';
      */
-    public function updateMultipleCondition(Model $table, array $arrays, string|null $keyName = null, bool $raw = false)
+    public function updateMultipleCondition(Model $table, array $arrays, ?string $keyName = null, bool $raw = false)
     {
         $driver = $table->getConnection()->getDriverName();
         $connectionName = $this->getConnectionName($table);
@@ -440,7 +425,7 @@ class Batch implements BatchInterface
         foreach ($arrays as $array) {
             foreach ($array['conditions'] as $keyCondition => $condition) {
                 if ($keyName == $keyCondition and !in_array($condition, $conditionMaster)) {
-                    $conditionMaster[] = str(Common::mysql_escape($condition))->toString();
+                    $conditionMaster[] = (string) Common::mysql_escape($condition);
                 }
             }
             foreach ($array as $key => $item) {
@@ -497,7 +482,7 @@ class Batch implements BatchInterface
                             $changeConditions[] = " {$backtick}{$fieldName}{$backtick} IS NOT NULL ";
                         } else {
                             $escapedValue = $raw ? Common::mysql_escape($newValue) : "'" . Common::mysql_escape($newValue) . "'";
-                            $changeConditions[] = " {$backtick}{$fieldName}{$backtick} != {$escapedValue} ";
+                            $changeConditions[] = " ({$backtick}{$fieldName}{$backtick} != {$escapedValue} OR {$backtick}{$fieldName}{$backtick} IS NULL) ";
                         }
                     }
                 }
@@ -533,6 +518,11 @@ class Batch implements BatchInterface
                     $arraysNew[$updatedAtColumn][] = $timestampCondition;
                 }
             }
+        }
+
+        // updated_at first: MySQL applies SET assignments left to right.
+        if ($updatedAtColumn && isset($arraysNew[$updatedAtColumn])) {
+            $arraysNew = [$updatedAtColumn => $arraysNew[$updatedAtColumn]] + $arraysNew;
         }
 
         $cases = [];
