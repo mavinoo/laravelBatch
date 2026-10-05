@@ -5,6 +5,7 @@ namespace Mavinoo\Batch;
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Casts;
+use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\DatabaseManager;
@@ -633,6 +634,161 @@ class Batch implements BatchInterface
             'overwrite' => (bool) ($options['overwrite'] ?? false),
             'enclosure' => $this->stringOption($options, 'enclosure'),
         ]);
+    }
+
+    /**
+     * Delete the rows a query matches, $chunk rows at a time, so a large delete doesn't lock the
+     * table or fill the undo log. Each chunk is its own statement.
+     *
+     * Rows are walked in primary key order, which works on every database. Models that use
+     * SoftDeletes are soft deleted unless $force is true. Model events are not fired.
+     *
+     * Example:
+     * ```
+     * Batch::deleteInChunks(Log::where('created_at', '<', now()->subYear()), chunk: 10000, sleepMs: 100);
+     * Log::where('created_at', '<', now()->subYear())->deleteInChunks(10000); // the same, as a builder macro
+     * ```
+     *
+     * @param EloquentBuilder<Model>|QueryBuilder $query a query without limit or offset; DB::table() queries use the "id" key
+     * @param int $chunk rows per statement
+     * @param int $sleepMs pause between chunks, to go easy on the server and its replicas
+     * @param bool $force delete soft-deleting models for real
+     * @param (callable(int): void)|null $onChunk called after every chunk with the number of rows deleted so far
+     * @return int number of deleted (or soft-deleted) rows
+     *
+     * @throws InvalidArgumentException for a query with limit / offset or an invalid chunk size
+     */
+    public function deleteInChunks(EloquentBuilder|QueryBuilder $query, int $chunk = 1000, int $sleepMs = 0, bool $force = false, ?callable $onChunk = null): int
+    {
+        return $this->walkInChunks($query, $chunk, $sleepMs, $onChunk, false, function (array $keys, EloquentBuilder|QueryBuilder $matching, string $qualifiedKey) use ($force): int {
+            $matching->whereIn($qualifiedKey, $keys);
+
+            if ($matching instanceof QueryBuilder) {
+                return $matching->delete();
+            }
+
+            $deleted = $force ? $matching->forceDelete() : $matching->delete();
+
+            return is_int($deleted) ? $deleted : 0;
+        });
+    }
+
+    /**
+     * Update the rows a query matches with the same values, $chunk rows at a time.
+     *
+     * Rows are walked in primary key order, so a row whose update stops it matching the query
+     * is never visited twice and the loop always ends. Eloquent queries set updated_at.
+     *
+     * Example:
+     * ```
+     * Batch::updateInChunks(User::where('active', false), ['status' => 'archived'], chunk: 5000);
+     * User::where('active', false)->updateInChunks(['status' => 'archived'], 5000); // as a builder macro
+     * ```
+     *
+     * @param EloquentBuilder<Model>|QueryBuilder $query a query without limit or offset; DB::table() queries use the "id" key
+     * @param array<array-key, mixed> $values column => value, DB::raw() and "column->key" JSON paths included
+     * @param int $chunk rows per statement
+     * @param int $sleepMs pause between chunks
+     * @param (callable(int): void)|null $onChunk called after every chunk with the number of rows updated so far
+     * @return int number of updated rows
+     *
+     * @throws InvalidArgumentException for empty values, a query with limit / offset or an invalid chunk size
+     */
+    public function updateInChunks(EloquentBuilder|QueryBuilder $query, array $values, int $chunk = 1000, int $sleepMs = 0, ?callable $onChunk = null): int
+    {
+        if (!$values) {
+            throw new InvalidArgumentException('updateInChunks() needs at least one column to update.');
+        }
+
+        $this->assertColumnNames($values);
+
+        $values = array_map([$this, 'enumValue'], $values);
+        if ($query instanceof EloquentBuilder) {
+            $model = $query->getModel();
+            $jsonCasts = $this->jsonCastColumns($model);
+            foreach ($values as $column => $value) {
+                $values[$column] = $this->castToJson($model, $jsonCasts, $column, $value);
+            }
+        }
+
+        return $this->walkInChunks($query, $chunk, $sleepMs, $onChunk, false, function (array $keys, EloquentBuilder|QueryBuilder $matching, string $qualifiedKey) use ($values): int {
+            return $matching->whereIn($qualifiedKey, $keys)->update($values);
+        });
+    }
+
+    /**
+     * Move the rows a query matches into another table, $chunk rows at a time.
+     *
+     * Each chunk is locked, copied with INSERT ... SELECT and deleted in one transaction, so no
+     * row is lost or copied twice. Columns default to the ones both tables have.
+     *
+     * When the target is a model on another connection, rows are copied with INSERT IGNORE first
+     * and deleted from the source after. That can't be one transaction, but running the archive
+     * again after a failure is safe: the target needs the source's primary key column, unique.
+     *
+     * Example:
+     * ```
+     * Batch::archive(Order::where('created_at', '<', '2020-01-01'), 'orders_archive', chunk: 5000);
+     * Order::where('created_at', '<', '2020-01-01')->archiveTo('orders_archive'); // as a builder macro
+     * ```
+     *
+     * @param EloquentBuilder<Model>|QueryBuilder $query a query without limit or offset; DB::table() queries use the "id" key
+     * @param Model|string $target the target model, or a table on the query's connection
+     * @param int $chunk rows per transaction
+     * @param int $sleepMs pause between chunks
+     * @param bool $delete delete the rows from the source; false only copies them
+     * @param list<string>|null $columns columns to copy; null copies every column both tables have
+     * @param (callable(int): void)|null $onChunk called after every chunk with the number of rows archived so far
+     * @return int number of archived rows
+     *
+     * @throws InvalidArgumentException for a query with limit / offset, an invalid chunk size or no shared columns
+     */
+    public function archive(EloquentBuilder|QueryBuilder $query, Model|string $target, int $chunk = 1000, int $sleepMs = 0, bool $delete = true, ?array $columns = null, ?callable $onChunk = null): int
+    {
+        $sourceConnection = $this->connectionOf($query);
+        $sourceTable = $this->tableOf($query);
+
+        if ($target instanceof Model) {
+            $targetConnection = $this->db->connection($this->getConnectionName($target));
+            $targetTable = $target->getTable();
+        } else {
+            if ($target === '') {
+                throw new InvalidArgumentException('archive() needs a target table.');
+            }
+            $targetConnection = $sourceConnection;
+            $targetTable = $target;
+        }
+
+        $sameConnection = $targetConnection->getName() === $sourceConnection->getName();
+        $key = $this->keyOf($query);
+
+        return $this->walkInChunks($query, $chunk, $sleepMs, $onChunk, true, function (array $keys) use (&$columns, $sourceConnection, $sourceTable, $targetConnection, $targetTable, $sameConnection, $key, $delete): int {
+            $columns ??= $this->sharedColumns($sourceConnection, $sourceTable, $targetConnection, $targetTable);
+            $rows = $sourceConnection->table($sourceTable)->select($columns)->whereIn($key, $keys);
+
+            if ($sameConnection) {
+                $copied = $targetConnection->table($targetTable)->insertUsing($columns, $rows);
+            } else {
+                if (!in_array($key, $columns, true)) {
+                    throw new InvalidArgumentException("archive() to another connection needs to copy the \"{$key}\" key column.");
+                }
+
+                $records = array_map(fn ($row) => (array) $row, $rows->get()->all());
+                $perQuery = $this->rowsPerInsert($targetConnection, 1000, count($columns));
+                $targetConnection->transaction(function () use ($targetConnection, $targetTable, $records, $perQuery) {
+                    foreach (array_chunk($records, $perQuery) as $part) {
+                        $targetConnection->table($targetTable)->insertOrIgnore($part);
+                    }
+                });
+                $copied = count($records);
+            }
+
+            if ($delete) {
+                $sourceConnection->table($sourceTable)->whereIn($key, $keys)->delete();
+            }
+
+            return $copied;
+        });
     }
 
     /**
@@ -1384,6 +1540,159 @@ class Batch implements BatchInterface
                     $columns[$column] = true;
                 }
             }
+        }
+
+        return $columns;
+    }
+
+    /**
+     * Walk the rows a query matches in primary key order, $chunk keys at a time, and run $work for
+     * each chunk with its keys and a fresh copy of the query.
+     *
+     * Inside pretend() nothing runs: the SELECT that picks the first chunk is recorded instead.
+     *
+     * @param EloquentBuilder<Model>|QueryBuilder $query
+     * @param (callable(int): void)|null $onChunk
+     * @param bool $lock lock each chunk's rows and run $work in the same transaction
+     * @param \Closure(list<mixed>, EloquentBuilder<Model>|QueryBuilder, string): int $work returns the rows it changed
+     */
+    private function walkInChunks(EloquentBuilder|QueryBuilder $query, int $chunk, int $sleepMs, ?callable $onChunk, bool $lock, \Closure $work): int
+    {
+        if ($chunk < 1) {
+            throw new InvalidArgumentException('The chunk size must be at least 1.');
+        }
+
+        if ($sleepMs < 0) {
+            throw new InvalidArgumentException('The pause between chunks can\'t be negative.');
+        }
+
+        $base = $query instanceof EloquentBuilder ? $query->getQuery() : $query;
+
+        if (!is_null($base->limit) || !is_null($base->offset)) {
+            throw new InvalidArgumentException('Chunked queries can\'t have a limit or offset; the rows are walked a chunk at a time.');
+        }
+
+        $connection = $this->connectionOf($query);
+        $key = $this->keyOf($query);
+        $qualifiedKey = $this->tableOf($query) . '.' . $key;
+        $total = 0;
+        $last = null;
+
+        while (true) {
+            $select = (clone $query)->reorder()->orderBy($qualifiedKey)->limit($chunk);
+            if (!is_null($last)) {
+                $select->where($qualifiedKey, '>', $last);
+            }
+            $select = $select instanceof EloquentBuilder ? $select->toBase() : $select;
+            $select->select($qualifiedKey);
+
+            if (!is_null($this->pretended)) {
+                $this->pretended[] = [
+                    'sql' => $select->toSql(),
+                    'bindings' => $connection->prepareBindings($select->getBindings()),
+                    'connection' => (string) $connection->getName(),
+                ];
+
+                return 0;
+            }
+
+            $step = function () use ($select, $lock, $key, $work, $query, $qualifiedKey): ?array {
+                if ($lock) {
+                    $select->lockForUpdate();
+                }
+
+                $keys = $select->pluck($key)->all();
+
+                return $keys ? [$keys, $work(array_values($keys), clone $query, $qualifiedKey)] : null;
+            };
+
+            $result = $lock ? $connection->transaction($step) : $step();
+
+            if (is_null($result)) {
+                break;
+            }
+
+            [$keys, $changed] = $result;
+            $total += $changed;
+            $last = end($keys);
+
+            if ($onChunk) {
+                $onChunk($total);
+            }
+
+            if (count($keys) < $chunk) {
+                break;
+            }
+
+            if ($sleepMs) {
+                usleep($sleepMs * 1000);
+            }
+        }
+
+        return $total;
+    }
+
+    /**
+     * The connection a chunked query runs on.
+     *
+     * @param EloquentBuilder<Model>|QueryBuilder $query
+     */
+    private function connectionOf(EloquentBuilder|QueryBuilder $query): Connection
+    {
+        $connection = ($query instanceof EloquentBuilder ? $query->getQuery() : $query)->getConnection();
+
+        if (!$connection instanceof Connection) {
+            throw new InvalidArgumentException('Chunked queries need a Laravel database connection.');
+        }
+
+        return $connection;
+    }
+
+    /**
+     * The table a chunked query runs on.
+     *
+     * @param EloquentBuilder<Model>|QueryBuilder $query
+     */
+    private function tableOf(EloquentBuilder|QueryBuilder $query): string
+    {
+        if ($query instanceof EloquentBuilder) {
+            return $query->getModel()->getTable();
+        }
+
+        if (!is_string($query->from) || preg_match('/\s/', $query->from)) {
+            throw new InvalidArgumentException('Chunked DB::table() queries need a plain table name, without an alias.');
+        }
+
+        return $query->from;
+    }
+
+    /**
+     * The primary key a chunked query is walked on: the model's key, or "id" for DB::table().
+     *
+     * @param EloquentBuilder<Model>|QueryBuilder $query
+     */
+    private function keyOf(EloquentBuilder|QueryBuilder $query): string
+    {
+        return $query instanceof EloquentBuilder ? $query->getModel()->getKeyName() : 'id';
+    }
+
+    /**
+     * The columns two tables have in common, in the source table's order.
+     *
+     * @return list<string>
+     */
+    private function sharedColumns(Connection $source, string $sourceTable, Connection $target, string $targetTable): array
+    {
+        $targetColumns = array_flip($target->getSchemaBuilder()->getColumnListing($targetTable));
+        $columns = [];
+        foreach ($source->getSchemaBuilder()->getColumnListing($sourceTable) as $column) {
+            if (isset($targetColumns[$column])) {
+                $columns[] = (string) $column;
+            }
+        }
+
+        if (!$columns) {
+            throw new InvalidArgumentException("The tables \"{$sourceTable}\" and \"{$targetTable}\" have no columns in common.");
         }
 
         return $columns;

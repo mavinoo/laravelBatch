@@ -2,8 +2,10 @@
 
 namespace Mavinoo\Batch;
 
-use Illuminate\Support\ServiceProvider;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
+use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Support\ServiceProvider;
 
 class BatchServiceProvider extends ServiceProvider
 {
@@ -22,5 +24,29 @@ class BatchServiceProvider extends ServiceProvider
         });
 
         $this->app->alias(Batch::class, 'Batch');
+    }
+
+    /**
+     * Add the chunked methods to Eloquent and query builders:
+     * Log::where(...)->deleteInChunks(), ->updateInChunks([...]) and ->archiveTo('table').
+     */
+    public function boot(): void
+    {
+        foreach ([EloquentBuilder::class, QueryBuilder::class] as $builder) {
+            $builder::macro('deleteInChunks', function (...$arguments) {
+                /** @var EloquentBuilder<\Illuminate\Database\Eloquent\Model>|QueryBuilder $this */
+                return app(Batch::class)->deleteInChunks($this, ...$arguments);
+            });
+
+            $builder::macro('updateInChunks', function (...$arguments) {
+                /** @var EloquentBuilder<\Illuminate\Database\Eloquent\Model>|QueryBuilder $this */
+                return app(Batch::class)->updateInChunks($this, ...$arguments);
+            });
+
+            $builder::macro('archiveTo', function (...$arguments) {
+                /** @var EloquentBuilder<\Illuminate\Database\Eloquent\Model>|QueryBuilder $this */
+                return app(Batch::class)->archive($this, ...$arguments);
+            });
+        }
     }
 }

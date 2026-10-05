@@ -17,6 +17,9 @@ Older releases are listed on the [GitHub releases page](https://github.com/mavin
   insert-ignore and upsert, column mapping, transforms, progress and error callbacks.
 - `splitFile()`: split a large file into parts by number of records and / or size, without cutting
   a record or a multi-line CSV field in half.
+- `deleteInChunks()`, `updateInChunks()` and `archive()`: delete, update or move the rows a query
+  matches a chunk at a time, walking the table in primary key order. Also available as
+  `deleteInChunks()`, `updateInChunks()` and `archiveTo()` on Eloquent and query builders.
 
 ### Fixed
 - Updating a PostgreSQL `json` column failed with "operator does not exist: json <> unknown".

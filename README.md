@@ -285,6 +285,51 @@ Batch::deleteByKeys(new Score, [
 Models that use `SoftDeletes` are soft deleted (only `deleted_at`, and `updated_at`, are set).
 Pass `true` as the fourth argument to delete them for real.
 
+# Large deletes, updates and archives
+
+Deleting or updating millions of rows in one statement locks the table for a long time and fills
+the undo log. These methods do it a chunk at a time. Rows are walked in primary key order
+(`WHERE id > ? ORDER BY id LIMIT ?`), which works on every database and always ends, even when
+the update stops rows matching the query.
+
+```php
+// Delete
+Batch::deleteInChunks(Log::where('created_at', '<', now()->subYear()), chunk: 10000, sleepMs: 100);
+
+// Update every matching row with the same values
+Batch::updateInChunks(User::where('active', false), ['status' => 'archived'], chunk: 5000);
+
+// Move rows into another table
+Batch::archive(Order::where('created_at', '<', '2020-01-01'), 'orders_archive', chunk: 5000);
+```
+
+The same methods are available on every Eloquent and query builder:
+
+```php
+Log::where('created_at', '<', now()->subYear())->deleteInChunks(10000);
+User::where('active', false)->updateInChunks(['status' => 'archived']);
+Order::where('created_at', '<', '2020-01-01')->archiveTo('orders_archive');
+DB::table('logs')->where('level', 'debug')->deleteInChunks();
+```
+
+- All three return the number of rows they changed. `sleepMs` pauses between chunks, to go easy on
+  the server and its replicas, and `onChunk` is called after every chunk with the running total.
+- Each chunk is its own statement, so the whole operation is not one transaction.
+- Models that use `SoftDeletes` are soft deleted by `deleteInChunks()`, unless `force: true`.
+  Model events are not fired.
+- `updateInChunks()` sets `updated_at` for Eloquent queries, and accepts `DB::raw()`, enums and
+  `column->key` JSON paths. Arrays are only allowed for columns the model casts to JSON; use
+  `DB::raw('balance + 1')` to increment.
+- `archive()` locks each chunk and copies it with `INSERT ... SELECT` before deleting it, in one
+  transaction, so no row is lost or copied twice. It copies the columns both tables have, or the
+  `columns` you pass; `delete: false` only copies. The source rows are deleted for real, also for
+  soft-deleting models.
+- `archive()` to a model on another connection can't use one transaction. It copies the chunk with
+  `INSERT IGNORE` first and deletes it after, so running it again after a failure is safe. The
+  target table needs the primary key column, as a primary or unique key.
+- Queries can't have a limit or offset. `DB::table()` queries are walked on the `id` column.
+- Inside `pretend()` nothing runs: the `SELECT` that picks the first chunk is recorded.
+
 # Upsert
 
 Insert rows, or update them when a row with the same `$uniqueBy` values already exists, in one query:
