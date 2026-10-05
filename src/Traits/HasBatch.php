@@ -226,7 +226,7 @@ trait HasBatch
      * @param  mixed  $source
      * @param  array<string, mixed>  $options
      *
-     * @return array{totalRows: int, skipped: int}
+     * @return array{totalRows: int, skipped: int, errors: array<int, array<string, array<int, string>>>}
      */
     public static function batchImport(mixed $source, array $options = []): array
     {

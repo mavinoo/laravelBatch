@@ -128,7 +128,7 @@ final class FileSplitter
      *
      * @return array{0: string, 1: string, 2: string}
      */
-    private static function nameParts(string $path, ?string $directory): array
+    public static function nameParts(string $path, ?string $directory): array
     {
         $name = basename($path);
         if (str_ends_with(strtolower($name), '.gz')) {

@@ -55,6 +55,10 @@ abstract class TestCase extends Orchestra
                     'database' => env('DB_DATABASE', 'batch_test'),
                     'username' => env('DB_USERNAME', 'root'),
                     'password' => env('DB_PASSWORD', ''),
+                    // For "fast" imports with LOAD DATA LOCAL INFILE.
+                    'options' => [
+                        (defined('Pdo\Mysql::ATTR_LOCAL_INFILE') ? constant('Pdo\Mysql::ATTR_LOCAL_INFILE') : \PDO::MYSQL_ATTR_LOCAL_INFILE) => true,
+                    ],
                 ];
             case 'pgsql':
                 return [

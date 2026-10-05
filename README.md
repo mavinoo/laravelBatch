@@ -247,12 +247,46 @@ The source can be:
 | `transform` | | `fn (array $row, int $number): ?array` |
 | `onChunk` | | `fn (int $written)`, after every chunk |
 | `onError` | | `fn (InvalidArgumentException $e, int $number)`: skip malformed rows instead of stopping |
+| `rules` | | Laravel validation rules for each row; failing rows are skipped and reported |
+| `fast` | `false` | load with `COPY` (PostgreSQL) or `LOAD DATA LOCAL INFILE` (MySQL, MariaDB) |
 
 - CSV files are read the RFC 4180 way: quotes inside a field are doubled, and quoted fields can span
   lines. A UTF-8 BOM is removed.
 - Every row needs the same columns. A row that can't be read (wrong number of fields, invalid
   JSON, different columns) stops the import with its row number, unless `onError` is given.
 - Never pass a path that comes from user input.
+
+## Validate rows
+
+Rows are checked with Laravel's validator after `map` and `nullValues`, and before `transform`.
+Rows that fail are skipped and their messages are returned by row number:
+
+```php
+$result = Batch::import(new User, 'users.csv', [
+    'rules' => ['email' => 'required|email', 'age' => 'nullable|integer|min:0'],
+]);
+
+// ['totalRows' => 9988, 'skipped' => 12, 'errors' => [15 => ['email' => ['The email field must be a valid email address.']], ...]]
+```
+
+## Fast imports
+
+`'fast' => true` hands each chunk to the database's own bulk loader: `COPY` on PostgreSQL and
+`LOAD DATA LOCAL INFILE` on MySQL and MariaDB. Importing a 1,000,000-row CSV file took 6.6 s instead
+of 18.7 s on PostgreSQL, 8.4 s instead of 18.7 s on MySQL and 6.4 s instead of 12.6 s on MariaDB.
+
+```php
+Batch::import(new Order, storage_path('orders.csv'), ['fast' => true]);
+```
+
+- Only the default `insert` mode, and no `DB::raw()` values. Enums, JSON casts and timestamps work as
+  usual. The chunk size defaults to 10,000 rows.
+- MySQL and MariaDB need `LOCAL INFILE` allowed on both sides: add
+  `PDO::MYSQL_ATTR_LOCAL_INFILE => true` to the connection's `options` in `config/database.php`, and
+  set `local_infile = ON` on the server (MySQL 8 ships with it off).
+- `LOAD DATA LOCAL` stores bad values (a word in a number column) with a warning instead of failing.
+  Batch checks the warnings and throws, so with the default `atomic` import nothing is written.
+- On SQLite and other databases, `fast` imports as usual.
 
 ## Split a large file
 
@@ -270,6 +304,36 @@ Batch::splitFile($path, lines: 50000, bytes: 50_000_000);   // whichever comes f
 - Records are copied byte for byte, so quoting and line endings don't change.
 - Parts go next to the file, or into the `directory` option. An existing part throws, unless
   `'overwrite' => true`. A `.gz` file is read and split into plain parts.
+
+# Export
+
+`export()` writes the rows a query matches to a CSV, TSV or JSON Lines file, also gzipped, a chunk at
+a time with constant memory:
+
+```php
+Batch::export(User::where('active', true), storage_path('users.csv'), [
+    'columns' => ['id', 'email', 'name'],
+    'maxRows' => 100000,                  // users-001.csv, users-002.csv, ...
+]);
+// ['totalRows' => 250000, 'files' => ['.../users-001.csv', '.../users-002.csv', '.../users-003.csv']]
+
+User::where('active', true)->exportTo(storage_path('users.jsonl'));   // on the query
+```
+
+| Option | Default | |
+|---|---|---|
+| `columns` | the query's select, or every column | the columns to export |
+| `format` | from the extension | `'csv'`, `'tsv'` or `'jsonl'` |
+| `header` | `true` | write the column names first in CSV files |
+| `delimiter`, `enclosure` | `,` (tab for TSV), `"` | |
+| `maxRows` | | rows per file; the parts are numbered |
+| `chunk` | `1000` | rows per query |
+| `overwrite` | `false` | replace existing files instead of throwing |
+| `transform` | | `fn (array $row): ?array`; `null` leaves the row out |
+| `onChunk` | | `fn (int $written)`, after every chunk |
+
+Rows are read in primary key order (`DB::table()` queries use `id`), so the query can't have a limit
+or offset. CSV files are written the RFC 4180 way and can be imported again with `import()`.
 
 # Delete
 
@@ -339,6 +403,7 @@ Log::where('created_at', '<', now()->subYear())->deleteInChunks(10000);
 User::where('active', false)->updateInChunks(['status' => 'archived']);
 Order::where('created_at', '<', '2020-01-01')->archiveTo('orders_archive');
 DB::table('logs')->where('level', 'debug')->deleteInChunks();
+User::where('active', true)->exportTo(storage_path('users.csv'));
 ```
 
 - All three return the number of rows they changed. `sleepMs` pauses between chunks, to go easy on
