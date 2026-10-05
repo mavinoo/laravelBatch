@@ -3,7 +3,7 @@
 All notable changes to `mavinoo/laravel-batch` are documented here.
 Older releases are listed on the [GitHub releases page](https://github.com/mavinoo/laravelBatch/releases).
 
-## 3.2.0 - Unreleased
+## 3.2.0 - 2026-10-05
 
 ### Added
 - Update keys inside JSON columns with `column->key` (#64, #83, #111). Values keep their JSON type,
