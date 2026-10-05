@@ -2,7 +2,9 @@
 
 namespace Mavinoo\Batch;
 
+use Illuminate\Container\Container;
 use Illuminate\Contracts\Database\Query\Expression;
+use Illuminate\Contracts\Validation\Factory as ValidationFactory;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Casts;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
@@ -16,8 +18,10 @@ use Illuminate\Support\Carbon;
 use InvalidArgumentException;
 use Mavinoo\Batch\Support\FileSplitter;
 use Mavinoo\Batch\Support\JsonPath;
+use Mavinoo\Batch\Support\RawSql;
 use Mavinoo\Batch\Support\RecordingConnection;
 use Mavinoo\Batch\Support\RowReader;
+use Mavinoo\Batch\Support\RowWriter;
 
 /**
  * @phpstan-type Statement array{0: string, 1: list<mixed>}
@@ -466,15 +470,20 @@ class Batch implements BatchInterface
      * - delimiter, enclosure: CSV characters, default "," (tab for tsv) and '"'
      * - map: [source column => table column]; only the mapped columns are imported
      * - nullValues: strings stored as null, e.g. ['', 'NULL']
+     * - rules: Laravel validation rules, checked after map and nullValues; failing rows are skipped
+     *   and their messages returned in "errors", keyed by row number
      * - transform: fn (array $row, int $number): ?array, applied to every row; null skips it
      * - onChunk: fn (int $written): void, called after every chunk
      * - onError: fn (InvalidArgumentException $e, int $number): void; malformed rows are passed to
      *   it and skipped instead of stopping the import
+     * - fast: load with COPY (PostgreSQL) or LOAD DATA LOCAL INFILE (MySQL, MariaDB); insert mode only,
+     *   chunk defaults to 10000. Other databases import as usual.
      *
      * @param Model $table
      * @param mixed $source a file path, an open stream resource, or an iterable of rows (arrays, models or objects)
      * @param array<string, mixed> $options
-     * @return array{totalRows: int, skipped: int} rows written, and rows skipped by transform or onError
+     * @return array{totalRows: int, skipped: int, errors: array<int, array<string, array<int, string>>>}
+     *         rows written, rows skipped, and the validation errors of skipped rows by row number
      *
      * @throws InvalidArgumentException for an invalid option, an unreadable source, or a malformed row without onError
      */
@@ -482,8 +491,10 @@ class Batch implements BatchInterface
     {
         $this->assertKnownOptions('import', $options, [
             'mode', 'uniqueBy', 'update', 'chunk', 'atomic', 'format', 'header', 'columns', 'delimiter',
-            'enclosure', 'map', 'nullValues', 'transform', 'onChunk', 'onError',
+            'enclosure', 'map', 'nullValues', 'rules', 'transform', 'onChunk', 'onError', 'fast',
         ]);
+
+        $fast = (bool) ($options['fast'] ?? false);
 
         $mode = $options['mode'] ?? 'insert';
         if (!in_array($mode, ['insert', 'insertIgnore', 'upsert'], true)) {
@@ -500,7 +511,11 @@ class Batch implements BatchInterface
             throw new InvalidArgumentException('The import "update" option must be an array of columns.');
         }
 
-        $chunkSize = $options['chunk'] ?? 1000;
+        if ($fast && $mode !== 'insert') {
+            throw new InvalidArgumentException('A "fast" import can only insert; use the default "insert" mode.');
+        }
+
+        $chunkSize = $options['chunk'] ?? ($fast ? 10000 : 1000);
         if (!is_int($chunkSize) || $chunkSize < 1) {
             throw new InvalidArgumentException('The import "chunk" option must be a positive integer.');
         }
@@ -525,9 +540,19 @@ class Batch implements BatchInterface
             throw new InvalidArgumentException('The import "nullValues" option must be an array of strings.');
         }
 
+        $rules = $options['rules'] ?? null;
+        if (!is_null($rules) && (!is_array($rules) || !$rules)) {
+            throw new InvalidArgumentException('The import "rules" option must be a non-empty array of Laravel validation rules.');
+        }
+
         $transform = $this->callableOption($options, 'transform');
         $onChunk = $this->callableOption($options, 'onChunk');
         $onError = $this->callableOption($options, 'onError');
+        $validate = null;
+        if ($rules) {
+            $factory = Container::getInstance()->make(ValidationFactory::class);
+            $validate = fn (array $row) => $factory->make($row, $rules);
+        }
 
         $reader = RowReader::read($source, [
             'format' => $this->stringOption($options, 'format'),
@@ -537,8 +562,12 @@ class Batch implements BatchInterface
             'enclosure' => $this->stringOption($options, 'enclosure'),
         ]);
 
-        $write = function (array $rows) use ($table, $mode, $uniqueBy, $update, $chunkSize): void {
-            if ($mode === 'upsert') {
+        $connection = $this->db->connection($this->getConnectionName($table));
+
+        $write = function (array $rows) use ($table, $mode, $uniqueBy, $update, $chunkSize, $fast, $connection): void {
+            if ($fast && in_array($connection->getDriverName(), ['pgsql', 'mysql', 'mariadb'], true)) {
+                $this->bulkLoad($connection, $table, $rows);
+            } elseif ($mode === 'upsert') {
                 /** @var array<int, string>|string $uniqueBy */
                 $this->upsert($table, $rows, $uniqueBy, $update);
             } else {
@@ -546,14 +575,31 @@ class Batch implements BatchInterface
             }
         };
 
-        $run = function () use ($reader, $write, $chunkSize, $map, $nullValues, $transform, $onChunk, $onError): array {
+        $run = function () use ($reader, $write, $chunkSize, $map, $nullValues, $validate, $transform, $onChunk, $onError): array {
             $written = 0;
             $skipped = 0;
+            $errors = [];
             $chunk = [];
             $columns = null;
 
             foreach ($reader as [$number, $row, $error]) {
-                if (!is_null($row)) {
+                if (!is_null($row) && $validate) {
+                    $row = $this->mapImportRow($row, $map, $nullValues);
+
+                    if (is_string($row)) {
+                        [$row, $error] = [null, $row];
+                    } else {
+                        $validation = $validate($row);
+
+                        if ($validation->fails()) {
+                            $errors[$number] = $validation->errors()->toArray();
+                            $skipped++;
+                            continue;
+                        }
+
+                        [$row, $error] = $this->importRow($row, null, [], $transform, $number, $columns);
+                    }
+                } elseif (!is_null($row)) {
                     [$row, $error] = $this->importRow($row, $map, $nullValues, $transform, $number, $columns);
 
                     if (is_null($row) && is_null($error)) {
@@ -597,12 +643,151 @@ class Batch implements BatchInterface
                 }
             }
 
-            return ['totalRows' => $written, 'skipped' => $skipped];
+            return ['totalRows' => $written, 'skipped' => $skipped, 'errors' => $errors];
         };
 
-        $connection = $this->db->connection($this->getConnectionName($table));
-
         return ($options['atomic'] ?? true) ? $this->transaction($connection, $run) : $run();
+    }
+
+    /**
+     * Export the rows a query matches to a CSV, TSV or JSON Lines file (also gzipped), a chunk at
+     * a time, so tables of any size are exported with constant memory.
+     *
+     * Rows are read in primary key order. With "maxRows" the export is split into numbered parts.
+     *
+     * Example:
+     * ```
+     * Batch::export(User::where('active', true), storage_path('users.csv'), ['columns' => ['id', 'email']]);
+     * // ['totalRows' => 25000, 'files' => ['.../users.csv']]
+     * User::where('active', true)->exportTo(storage_path('users.csv'));   // as a builder macro
+     * ```
+     *
+     * Options:
+     * - columns: the columns to export; default the query's select, or every column
+     * - format: "csv", "tsv" or "jsonl"; by default taken from the file extension
+     * - header: write the column names first in CSV files (default true)
+     * - delimiter, enclosure: CSV characters, default "," (tab for tsv) and '"'
+     * - maxRows: rows per file; the parts are named users-001.csv, users-002.csv, ...
+     * - chunk: rows per query, default 1000
+     * - overwrite: replace existing files (default false: an existing file throws)
+     * - transform: fn (array $row): ?array, applied to every row; null leaves the row out
+     * - onChunk: fn (int $written): void, called after every chunk
+     *
+     * @param EloquentBuilder<Model>|QueryBuilder $query a query without limit or offset; DB::table() queries use the "id" key
+     * @param array<string, mixed> $options
+     * @return array{totalRows: int, files: list<string>}
+     *
+     * @throws InvalidArgumentException for an invalid option, an existing file or a query with limit / offset
+     */
+    public function export(EloquentBuilder|QueryBuilder $query, string $path, array $options = []): array
+    {
+        $this->assertKnownOptions('export', $options, [
+            'columns', 'format', 'header', 'delimiter', 'enclosure', 'maxRows', 'chunk', 'overwrite', 'transform', 'onChunk',
+        ]);
+
+        $chunk = $options['chunk'] ?? 1000;
+        if (!is_int($chunk) || $chunk < 1) {
+            throw new InvalidArgumentException('The export "chunk" option must be a positive integer.');
+        }
+
+        $maxRows = $options['maxRows'] ?? null;
+        if (!is_null($maxRows) && !is_int($maxRows)) {
+            throw new InvalidArgumentException('The export "maxRows" option must be a positive integer.');
+        }
+
+        $transform = $this->callableOption($options, 'transform');
+        $onChunk = $this->callableOption($options, 'onChunk');
+        $connection = $this->connectionOf($query);
+        $key = $this->keyOf($query);
+        $qualifiedKey = $this->tableOf($query) . '.' . $key;
+
+        $base = $query instanceof EloquentBuilder ? $query->toBase() : clone $query;
+        if (!is_null($base->limit) || !is_null($base->offset)) {
+            throw new InvalidArgumentException('Exported queries can\'t have a limit or offset; the rows are read a chunk at a time.');
+        }
+
+        // The key is needed to read the next chunk; leave it out of the file unless it was asked for.
+        $columns = isset($options['columns']) ? $this->columnList($options['columns']) : null;
+        $dropKey = false;
+        if ($columns) {
+            $base->select($columns);
+            $dropKey = !in_array($key, $columns, true) && !in_array($qualifiedKey, $columns, true);
+        } elseif (is_null($base->columns)) {
+            $base->select($this->tableOf($query) . '.*');
+        }
+        if ($dropKey) {
+            $base->addSelect($qualifiedKey);
+        }
+
+        $writer = new RowWriter(
+            $path,
+            $this->stringOption($options, 'format'),
+            $maxRows,
+            isset($options['header']) ? (bool) $options['header'] : null,
+            $this->stringOption($options, 'delimiter'),
+            $this->stringOption($options, 'enclosure') ?? '"',
+            (bool) ($options['overwrite'] ?? false),
+            $connection->getQueryGrammar()->getDateFormat(),
+        );
+
+        $written = 0;
+        $last = null;
+
+        try {
+            while (true) {
+                $select = (clone $base)->reorder()->orderBy($qualifiedKey)->limit($chunk);
+                if (!is_null($last)) {
+                    $select->where($qualifiedKey, '>', $last);
+                }
+
+                if (!is_null($this->pretended)) {
+                    $this->pretended[] = [
+                        'sql' => $select->toSql(),
+                        'bindings' => $connection->prepareBindings($select->getBindings()),
+                        'connection' => (string) $connection->getName(),
+                    ];
+
+                    return ['totalRows' => 0, 'files' => []];
+                }
+
+                $rows = $select->get()->all();
+
+                foreach ($rows as $row) {
+                    $row = (array) $row;
+                    $last = $row[$key] ?? null;
+
+                    if ($dropKey) {
+                        unset($row[$key]);
+                    }
+
+                    if ($transform) {
+                        $row = $transform($row);
+                        if (is_null($row)) {
+                            continue;
+                        }
+                        if (!is_array($row)) {
+                            throw new InvalidArgumentException('The export "transform" option must return an array or null.');
+                        }
+                    }
+
+                    /** @var array<string, mixed> $row */
+                    $writer->write($row);
+                    $written++;
+                }
+
+                if ($onChunk && $rows) {
+                    $onChunk($written);
+                }
+
+                if (count($rows) < $chunk || is_null($last)) {
+                    break;
+                }
+            }
+        } finally {
+            $files = $writer->close();
+        }
+
+        return ['totalRows' => $written, 'files' => $files];
     }
 
     /**
@@ -797,6 +982,327 @@ class Batch implements BatchInterface
     }
 
     /**
+     * A row's key values as a string, the same for values the database returns and values given.
+     *
+     * @param array<array-key, mixed> $row
+     * @param list<string> $keys
+     */
+    private function keyString(Connection $connection, array $row, array $keys): string
+    {
+        $values = [];
+        foreach ($keys as $key) {
+            $value = $this->enumValue($row[$key] ?? null);
+
+            if ($value instanceof \DateTimeInterface) {
+                $value = $value->format($connection->getQueryGrammar()->getDateFormat());
+            } elseif (is_bool($value)) {
+                $value = (int) $value;
+            }
+
+            $values[] = is_null($value) ? null : (is_scalar($value) ? (string) $value : serialize($value));
+        }
+
+        return json_encode($values, JSON_THROW_ON_ERROR);
+    }
+
+    /**
+     * Turn the counter (['+'], ['-'], ['max'], ['min']) and onlyIf parts of an upsert into the raw
+     * SET expressions Laravel's upsert() takes, for the connection's database.
+     *
+     * @param list<string> $columns the columns of the rows
+     * @param array<array-key, mixed>|null $update
+     * @param mixed $onlyIf
+     * @return array<array-key, mixed>|null
+     */
+    private function upsertAssignments(Connection $connection, Model $table, array $columns, ?array $update, mixed $onlyIf): ?array
+    {
+        if (!is_array($onlyIf)) {
+            throw new InvalidArgumentException('The upsert "onlyIf" option must be an array of column => operator.');
+        }
+
+        if (!$onlyIf && !array_filter($update ?? [], 'is_array')) {
+            return $update; // nothing special: let Laravel compile it
+        }
+
+        $grammar = $connection->getQueryGrammar();
+        $driver = $connection->getDriverName();
+        $update ??= $columns;
+
+        // Eloquent would add updated_at as a plain column, and fills it in every row; add it here so
+        // onlyIf covers it too.
+        $updatedAt = $table->usesTimestamps() ? $table->getUpdatedAtColumn() : null;
+        if ($updatedAt) {
+            $columns[] = $updatedAt;
+            if (!array_key_exists($updatedAt, $update) && !in_array($updatedAt, $update, true)) {
+                $update[] = $updatedAt;
+            }
+        }
+
+        $tableName = $table->getTable();
+        $existing = fn (string $column): string => $grammar->wrap($tableName . '.' . $column);
+        $incoming = function (string $column) use ($grammar, $driver, $connection, $columns): string {
+            if (!in_array($column, $columns, true)) {
+                throw new InvalidArgumentException("The upsert uses the new value of \"{$column}\", but the rows don't have that column.");
+            }
+
+            // The same references Laravel's grammars use for the new row (never table-prefixed).
+            if (in_array($driver, ['pgsql', 'sqlite'], true)) {
+                return $grammar->wrap('excluded') . '.' . $grammar->wrap($column);
+            }
+
+            return $connection->getConfig('use_upsert_alias')
+                ? $grammar->wrap('laravel_upsert_alias') . '.' . $grammar->wrap($column)
+                : 'VALUES(' . $grammar->wrap($column) . ')';
+        };
+
+        $assignments = [];
+        foreach ($update as $key => $value) {
+            if (is_int($key)) {
+                if (!is_string($value)) {
+                    throw new InvalidArgumentException('upsert() update columns must be column names.');
+                }
+                $assignments[$value] = $incoming($value);
+            } elseif ($value instanceof Expression) {
+                $assignments[$key] = (string) $grammar->getValue($value);
+            } elseif (is_array($value) && count($value) === 1 && in_array($value[0] ?? null, ['+', '-', 'max', 'min'], true)) {
+                $old = $existing($key);
+                $new = $incoming($key);
+                $assignments[$key] = match ($value[0]) {
+                    '+' => "COALESCE({$old}, 0) + {$new}",
+                    '-' => "COALESCE({$old}, 0) - {$new}",
+                    'max' => "CASE WHEN {$old} IS NULL OR {$new} > {$old} THEN {$new} ELSE {$old} END",
+                    'min' => "CASE WHEN {$old} IS NULL OR {$new} < {$old} THEN {$new} ELSE {$old} END",
+                };
+            } else {
+                throw new InvalidArgumentException(
+                    "Invalid upsert update for \"{$key}\": use ['+'], ['-'], ['max'], ['min'] or DB::raw()."
+                );
+            }
+        }
+
+        if ($onlyIf) {
+            $conditions = [];
+            foreach ($onlyIf as $column => $operator) {
+                if (!is_string($column) || !in_array($operator, ['>', '>=', '<', '<=', '<>', '!='], true)) {
+                    throw new InvalidArgumentException('The upsert "onlyIf" option must map columns to >, >=, <, <=, <> or !=.');
+                }
+                $conditions[] = '(' . $existing($column) . ' IS NULL OR ' . $incoming($column) . ' ' . $operator . ' ' . $existing($column) . ')';
+            }
+            $condition = implode(' AND ', $conditions);
+
+            // MySQL assigns columns left to right and later ones see the new values, so the
+            // columns the condition reads are assigned last. Two of them can't both be updated.
+            if (in_array($driver, ['mysql', 'mariadb'], true)) {
+                $read = array_intersect_key($assignments, $onlyIf);
+                if (count($read) > 1) {
+                    throw new InvalidArgumentException(
+                        'MySQL cannot update more than one "onlyIf" column in an upsert; leave all but one out of $update.'
+                    );
+                }
+                $assignments = array_diff_key($assignments, $read) + $read;
+            }
+
+            foreach ($assignments as $column => $sql) {
+                $assignments[$column] = "CASE WHEN {$condition} THEN {$sql} ELSE {$existing($column)} END";
+            }
+        }
+
+        return array_map(fn (string $sql) => new RawSql($sql), $assignments);
+    }
+
+    /**
+     * Upsert rows and return them as they are stored afterwards, in the order of $values.
+     *
+     * The rows are read back by their $uniqueBy values in the same transaction, so the result is
+     * the same on every database: inserted rows, updated rows, and rows an onlyIf condition left
+     * alone. Inside pretend() nothing runs, so it returns [].
+     *
+     * Example:
+     * ```
+     * $users = Batch::upsertReturning(new User, $rows, ['email'], ['name'], ['id', 'email']);
+     * // [['id' => 7, 'email' => 'ali@example.com'], ['id' => 102, 'email' => 'sara@example.com']]
+     * ```
+     *
+     * @param array<array-key, mixed> $values rows of column => value pairs, all with the same columns
+     * @param array<int, string>|string $uniqueBy the column(s) that identify a row
+     * @param array<array-key, mixed>|null $update see upsert()
+     * @param list<string> $returning columns to return, default every column
+     * @param array<string, mixed> $options see upsert()
+     * @return list<array<string, mixed>>
+     */
+    public function upsertReturning(Model $table, array $values, $uniqueBy, ?array $update = null, array $returning = ['*'], array $options = []): array
+    {
+        $keys = $this->keyColumns((array) $uniqueBy, 'upsertReturning');
+        $connection = $this->db->connection($this->getConnectionName($table));
+
+        return $this->transaction($connection, function () use ($table, $values, $keys, $update, $returning, $options, $connection): array {
+            $this->upsert($table, $values, $keys, $update, $options);
+
+            if (!is_null($this->pretended)) {
+                return [];
+            }
+
+            $matches = [];
+            foreach ($values as $row) {
+                /** @var array<string, mixed> $row */
+                $match = array_map([$this, 'enumValue'], array_intersect_key($row, array_flip($keys)));
+                $matches[$this->keyString($connection, $match, $keys)] = $match;
+            }
+
+            $select = $returning === ['*'] ? ['*'] : array_values(array_unique(array_merge($returning, $keys)));
+            $found = [];
+            $perQuery = max(1, intdiv($this->maxBindings($connection), count($keys)));
+
+            foreach (array_chunk($matches, $perQuery) as $chunk) {
+                $query = $connection->table($table->getTable())->select($select)->where(function (QueryBuilder $query) use ($chunk) {
+                    foreach ($chunk as $match) {
+                        $query->orWhere(fn (QueryBuilder $row) => $row->where($match));
+                    }
+                });
+
+                foreach ($query->get() as $row) {
+                    $row = (array) $row;
+                    $found[$this->keyString($connection, $row, $keys)] = $returning === ['*'] ? $row : array_intersect_key($row, array_flip($returning));
+                }
+            }
+
+            // In the order of $values. Rows the database matched differently (a case-insensitive
+            // collation, for example) come last.
+            $result = [];
+            foreach (array_keys($matches) as $key) {
+                if (isset($found[$key])) {
+                    $result[] = $found[$key];
+                    unset($found[$key]);
+                }
+            }
+
+            return array_merge($result, array_values($found));
+        });
+    }
+
+    /**
+     * Insert rows, skip the ones that hit a unique key, and report exactly which were skipped.
+     *
+     * PostgreSQL and SQLite tell with RETURNING. MySQL and MariaDB need an auto-incrementing
+     * primary key that the rows don't set: a multi-row INSERT gets one block of ids, so the rows
+     * of the block are the inserted ones. Inside pretend() nothing runs.
+     *
+     * Example:
+     * ```
+     * $result = Batch::insertOrIgnoreRows(new User, $rows, ['email']);
+     * // ['inserted' => 98, 'skipped' => [['email' => 'dup@example.com', ...], ...]]
+     * ```
+     *
+     * @param array<array-key, mixed> $rows rows of column => value pairs, all with the same columns
+     * @param array<int, string>|string $uniqueBy the column(s) that identify a row
+     * @param int $batchSize rows per query (at least 100)
+     * @return array{inserted: int, skipped: list<array<string, mixed>>} the skipped rows as given
+     *
+     * @throws InvalidArgumentException for a malformed row, or on MySQL a model without an auto-incrementing key
+     */
+    public function insertOrIgnoreRows(Model $table, array $rows, array|string $uniqueBy, int $batchSize = 500): array
+    {
+        $keys = $this->keyColumns((array) $uniqueBy, 'insertOrIgnoreRows');
+        [$columns, $values] = $this->splitRows($rows);
+
+        if (!$values) {
+            return ['inserted' => 0, 'skipped' => []];
+        }
+
+        foreach ($keys as $key) {
+            if (!in_array($key, $columns, true)) {
+                throw new InvalidArgumentException("Every row must contain the \"{$key}\" column used to find skipped rows.");
+            }
+        }
+
+        $connection = $this->db->connection($this->getConnectionName($table));
+        $driver = $connection->getDriverName();
+        $keyName = $table->getKeyName();
+
+        if (in_array($driver, ['mysql', 'mariadb'], true) && (!$table->getIncrementing() || in_array($keyName, $columns, true))) {
+            throw new InvalidArgumentException(
+                'On MySQL and MariaDB, insertOrIgnoreRows() needs a model with an auto-incrementing primary key that the rows don\'t set.'
+            );
+        }
+
+        if (!in_array($driver, ['mysql', 'mariadb', 'pgsql', 'sqlite'], true)) {
+            throw new InvalidArgumentException("insertOrIgnoreRows() is not supported on the \"{$driver}\" driver.");
+        }
+
+        $prepared = $this->prepareInsertRows($table, $columns, $values);
+        $original = array_values($rows);
+        $rowsPerQuery = $this->rowsPerInsert($connection, max(100, $batchSize), count($prepared[0]));
+
+        return $this->transaction($connection, function () use ($connection, $table, $prepared, $original, $rowsPerQuery, $keys, $keyName, $driver): array {
+            $runner = $this->runner($connection);
+            $inserted = 0;
+            $skipped = [];
+
+            foreach (array_chunk($prepared, $rowsPerQuery, true) as $chunk) {
+                $query = $this->baseQuery($connection, $table);
+                $bindings = $query->cleanBindings(Arr::flatten($chunk, 1));
+                $sql = $query->getGrammar()->compileInsertOrIgnore($query, array_values($chunk));
+
+                if (in_array($driver, ['pgsql', 'sqlite'], true)) {
+                    $sql .= ' returning ' . $query->getGrammar()->columnize($keys);
+
+                    if (!is_null($this->pretended)) {
+                        $runner->insert($sql, $bindings);
+                        continue;
+                    }
+
+                    $returned = array_map(fn ($row) => (array) $row, $connection->selectFromWriteConnection($sql, $bindings));
+                } else {
+                    $affected = $runner->affectingStatement($sql, $bindings);
+
+                    if (!is_null($this->pretended)) {
+                        continue;
+                    }
+
+                    if ($affected === 0) {
+                        $returned = [];
+                    } elseif ($affected === count($chunk)) {
+                        $returned = array_values($chunk);
+                    } else {
+                        // The chunk got one block of ids and LAST_INSERT_ID() is its first inserted
+                        // row. Other connections' ids come before or after the block, so the inserted
+                        // rows are the first $affected rows from there.
+                        $first = $this->selectId($connection, 'SELECT LAST_INSERT_ID() AS id');
+                        $returned = array_map(fn ($row) => (array) $row, $connection->table($table->getTable())
+                            ->select($keys)
+                            ->where($keyName, '>=', $first)
+                            ->orderBy($keyName)
+                            ->limit($affected)
+                            ->get()
+                            ->all());
+                    }
+                }
+
+                // Count each returned key once, so a key given twice in the chunk is inserted once.
+                $remaining = [];
+                foreach ($returned as $row) {
+                    $key = $this->keyString($connection, $row, $keys);
+                    $remaining[$key] = ($remaining[$key] ?? 0) + 1;
+                }
+
+                foreach ($chunk as $index => $row) {
+                    $key = $this->keyString($connection, $row, $keys);
+                    if (($remaining[$key] ?? 0) > 0) {
+                        $remaining[$key]--;
+                        $inserted++;
+                    } else {
+                        /** @var array<string, mixed> $skippedRow */
+                        $skippedRow = $original[$index];
+                        $skipped[] = $skippedRow;
+                    }
+                }
+            }
+
+            return ['inserted' => $inserted, 'skipped' => $skipped];
+        });
+    }
+
+    /**
      * Make the rows a query matches look like a list: insert new rows, update existing ones and
      * delete the rows the list doesn't have, in one transaction.
      *
@@ -925,18 +1431,26 @@ class Batch implements BatchInterface
      *     ['email' => 'ali@example.com', 'name' => 'Ali', 'score' => 90],
      *     ['email' => 'sara@example.com', 'name' => 'Sara', 'score' => 75],
      * ], ['email'], ['name', 'score']);
+     *
+     * Batch::upsert(new Stock, $rows, ['sku'], ['qty' => ['+']]);                           // add to the stored qty
+     * Batch::upsert(new Product, $rows, ['sku'], null, ['onlyIf' => ['updated_at' => '>']]); // newer rows win
      * ```
      *
      * @param Model $table
      * @param array<array-key, mixed> $values rows of column => value pairs, all with the same columns
      * @param array<int, string>|string $uniqueBy the column(s) that identify an existing row
-     * @param array<array-key, mixed>|null $update columns to update on existing rows; null updates every given column
+     * @param array<array-key, mixed>|null $update columns to update on existing rows; null updates every given column.
+     *        A column => ['+'], ['-'], ['max'] or ['min'] combines the stored value with the new one.
+     * @param array<string, mixed> $options onlyIf: [column => '>', ...] updates an existing row only when
+     *        the new value compares that way with the stored one (or the stored one is null)
      * @return int number of affected rows, as reported by the database
      *
-     * @throws InvalidArgumentException when $uniqueBy or $update is empty or a row is malformed
+     * @throws InvalidArgumentException when $uniqueBy or $update is empty, a row is malformed or an option is invalid
      */
-    public function upsert(Model $table, array $values, $uniqueBy, ?array $update = null): int
+    public function upsert(Model $table, array $values, $uniqueBy, ?array $update = null, array $options = []): int
     {
+        $this->assertKnownOptions('upsert', $options, ['onlyIf']);
+
         $uniqueBy = array_values((array) $uniqueBy);
 
         if (!$uniqueBy) {
@@ -969,6 +1483,7 @@ class Batch implements BatchInterface
         $rows = $this->castRowsToJson($table, $rows);
 
         $connection = $this->db->connection($this->getConnectionName($table));
+        $update = $this->upsertAssignments($connection, $table, $columns, $update, $options['onlyIf'] ?? []);
 
         // Keep each statement under the driver's bound parameter limit, counting the timestamps
         // Eloquent adds and the values bound once per statement for computed updates.
@@ -1929,23 +2444,10 @@ class Batch implements BatchInterface
      */
     private function importRow(array $row, ?array $map, array $nullValues, ?callable $transform, int $number, ?array $columns): array
     {
-        if (!is_null($map)) {
-            $mapped = [];
-            foreach ($map as $from => $to) {
-                if (!array_key_exists($from, $row)) {
-                    return [null, "it has no \"{$from}\" column"];
-                }
-                $mapped[$to] = $row[$from];
-            }
-            $row = $mapped;
-        }
+        $row = $this->mapImportRow($row, $map, $nullValues);
 
-        if ($nullValues) {
-            foreach ($row as $column => $value) {
-                if (is_string($value) && in_array($value, $nullValues, true)) {
-                    $row[$column] = null;
-                }
-            }
+        if (is_string($row)) {
+            return [null, $row];
         }
 
         if ($transform) {
@@ -1973,6 +2475,209 @@ class Batch implements BatchInterface
         }
 
         return [$named, null];
+    }
+
+    /**
+     * Apply an import's column map and null values to a row.
+     *
+     * @param array<array-key, mixed> $row
+     * @param array<array-key, string>|null $map
+     * @param array<array-key, mixed> $nullValues
+     * @return array<array-key, mixed>|string the row, or an error
+     */
+    private function mapImportRow(array $row, ?array $map, array $nullValues): array|string
+    {
+        if (!is_null($map)) {
+            $mapped = [];
+            foreach ($map as $from => $to) {
+                if (!array_key_exists($from, $row)) {
+                    return "it has no \"{$from}\" column";
+                }
+                $mapped[$to] = $row[$from];
+            }
+            $row = $mapped;
+        }
+
+        if ($nullValues) {
+            foreach ($row as $column => $value) {
+                if (is_string($value) && in_array($value, $nullValues, true)) {
+                    $row[$column] = null;
+                }
+            }
+        }
+
+        return $row;
+    }
+
+    /**
+     * Insert rows with the database's own bulk loader: COPY on PostgreSQL, LOAD DATA LOCAL INFILE
+     * on MySQL and MariaDB. Rows get the same enums, JSON casts and timestamps as insertRows().
+     *
+     * @param array<array-key, mixed> $rows rows of column => value pairs
+     */
+    private function bulkLoad(Connection $connection, Model $table, array $rows): void
+    {
+        // import() checked that every row has the first row's columns, so no splitRows() here:
+        // this loop runs for every value of a large file.
+        $rows = array_values($rows);
+        if (!$rows || !is_array($rows[0])) {
+            return;
+        }
+
+        $grammar = $connection->getQueryGrammar();
+        $dateFormat = $grammar->getDateFormat();
+        $columns = array_map('strval', array_keys($rows[0]));
+        $jsonCasts = $this->jsonCastColumns($table);
+
+        // Timestamps the rows don't set, the same for every row.
+        $extra = [];
+        if ($table->usesTimestamps()) {
+            $now = Carbon::now()->format($table->getDateFormat());
+            foreach ([$table->getCreatedAtColumn(), $table->getUpdatedAtColumn()] as $timestamp) {
+                if (!is_null($timestamp) && !in_array($timestamp, $columns, true)) {
+                    $extra[$timestamp] = $now;
+                }
+            }
+        }
+        $suffix = $extra ? "\t" . implode("\t", array_map(fn ($value) => $this->bulkLoadValue($value, $dateFormat), $extra)) : '';
+
+        $lines = [];
+        foreach ($rows as $row) {
+            /** @var array<string, mixed> $row */
+            $fields = [];
+            foreach ($row as $column => $value) {
+                if (is_string($value)) {
+                    // Most values need no escaping; only scan them.
+                    $fields[] = strpbrk($value, "\\\t\n\r") === false ? $value : $this->bulkLoadValue($value, $dateFormat);
+                    continue;
+                }
+
+                if (isset($jsonCasts[$column])) {
+                    $value = $this->castToJson($table, $jsonCasts, $column, $value);
+                }
+
+                $fields[] = $this->bulkLoadValue($this->enumValue($value), $dateFormat);
+            }
+            $lines[] = implode("\t", $fields) . $suffix;
+        }
+
+        $tableSql = $grammar->wrapTable($table->getTable());
+        $fields = $grammar->columnize(array_merge($columns, array_keys($extra)));
+
+        if ($connection->getDriverName() === 'pgsql') {
+            if (!is_null($this->pretended)) {
+                $this->pretended[] = ['sql' => "COPY {$tableSql} ({$fields}) FROM STDIN", 'bindings' => [], 'connection' => (string) $connection->getName()];
+
+                return;
+            }
+
+            // PHP 8.4 moved the method to Pdo\Pgsql; older versions have it on the PDO object.
+            $pdo = $connection->getPdo();
+            $copy = [$pdo, class_exists(\Pdo\Pgsql::class) && $pdo instanceof \Pdo\Pgsql ? 'copyFromArray' : 'pgsqlCopyFromArray'];
+            if (!is_callable($copy)) {
+                throw new \RuntimeException('This PHP build has no COPY support in pdo_pgsql.');
+            }
+            $copy($tableSql, $lines, "\t", '\\\\N', $fields);
+
+            return;
+        }
+
+        $file = tempnam(sys_get_temp_dir(), 'batch');
+        if ($file === false) {
+            throw new \RuntimeException('Could not create a temporary file for LOAD DATA.');
+        }
+
+        try {
+            file_put_contents($file, implode("\n", $lines) . "\n");
+
+            $sql = 'LOAD DATA LOCAL INFILE ' . $connection->getPdo()->quote($file) . " INTO TABLE {$tableSql} CHARACTER SET utf8mb4"
+                . " FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' LINES TERMINATED BY '\\n' ({$fields})";
+
+            if (!is_null($this->pretended)) {
+                $this->pretended[] = ['sql' => $sql, 'bindings' => [], 'connection' => (string) $connection->getName()];
+
+                return;
+            }
+
+            try {
+                // LOAD DATA LOCAL can't be a prepared statement.
+                $loaded = $connection->getPdo()->exec($sql);
+            } catch (\Throwable $e) {
+                throw new \RuntimeException(
+                    'LOAD DATA LOCAL INFILE failed: ' . $e->getMessage() . ' A "fast" import on MySQL and MariaDB needs '
+                    . 'PDO::MYSQL_ATTR_LOCAL_INFILE => true in the connection\'s "options", and local_infile = ON on the server.',
+                    0,
+                    $e
+                );
+            }
+
+            // LOCAL turns data errors into warnings and keeps going, so check nothing was lost or
+            // changed. SHOW WARNINGS can't be a prepared statement either: run it as plain text.
+            $warnings = $this->mysqlWarnings($connection->getPdo());
+
+            if ($loaded !== count($lines) || $warnings) {
+                $first = $warnings[0]['Message'] ?? null;
+
+                throw new \RuntimeException(sprintf(
+                    'LOAD DATA loaded %d of %d rows with %d warnings%s.',
+                    (int) $loaded,
+                    count($lines),
+                    count($warnings),
+                    is_string($first) ? ', the first: ' . $first : ''
+                ));
+            }
+        } finally {
+            @unlink($file);
+        }
+    }
+
+    /**
+     * The warnings of the last statement on a MySQL connection.
+     *
+     * @return list<array<array-key, mixed>>
+     */
+    private function mysqlWarnings(\PDO $pdo): array
+    {
+        $emulate = $pdo->getAttribute(\PDO::ATTR_EMULATE_PREPARES);
+        $pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, true);
+
+        try {
+            $statement = $pdo->query('SHOW WARNINGS');
+            $rows = $statement ? $statement->fetchAll(\PDO::FETCH_ASSOC) : [];
+        } finally {
+            $pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, $emulate);
+        }
+
+        return array_values(array_filter($rows, 'is_array'));
+    }
+
+    /**
+     * A value in the text format COPY and LOAD DATA read: \N for null, tabs, newlines and
+     * backslashes escaped.
+     */
+    private function bulkLoadValue(mixed $value, string $dateFormat): string
+    {
+        if (is_null($value)) {
+            return '\\N';
+        }
+
+        if ($value instanceof Expression) {
+            throw new InvalidArgumentException('A "fast" import can\'t use DB::raw() values.');
+        }
+
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            $value = $value->format($dateFormat);
+        }
+
+        if (!is_scalar($value) && !$value instanceof \Stringable) {
+            throw new InvalidArgumentException('A "fast" import can only load single values, ' . get_debug_type($value) . ' given.');
+        }
+
+        return strtr((string) $value, ['\\' => '\\\\', "\t" => '\\t', "\n" => '\\n', "\r" => '\\r']);
     }
 
     /**

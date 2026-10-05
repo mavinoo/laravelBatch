@@ -247,12 +247,46 @@ The source can be:
 | `transform` | | `fn (array $row, int $number): ?array` |
 | `onChunk` | | `fn (int $written)`, after every chunk |
 | `onError` | | `fn (InvalidArgumentException $e, int $number)`: skip malformed rows instead of stopping |
+| `rules` | | Laravel validation rules for each row; failing rows are skipped and reported |
+| `fast` | `false` | load with `COPY` (PostgreSQL) or `LOAD DATA LOCAL INFILE` (MySQL, MariaDB) |
 
 - CSV files are read the RFC 4180 way: quotes inside a field are doubled, and quoted fields can span
   lines. A UTF-8 BOM is removed.
 - Every row needs the same columns. A row that can't be read (wrong number of fields, invalid
   JSON, different columns) stops the import with its row number, unless `onError` is given.
 - Never pass a path that comes from user input.
+
+## Validate rows
+
+Rows are checked with Laravel's validator after `map` and `nullValues`, and before `transform`.
+Rows that fail are skipped and their messages are returned by row number:
+
+```php
+$result = Batch::import(new User, 'users.csv', [
+    'rules' => ['email' => 'required|email', 'age' => 'nullable|integer|min:0'],
+]);
+
+// ['totalRows' => 9988, 'skipped' => 12, 'errors' => [15 => ['email' => ['The email field must be a valid email address.']], ...]]
+```
+
+## Fast imports
+
+`'fast' => true` hands each chunk to the database's own bulk loader: `COPY` on PostgreSQL and
+`LOAD DATA LOCAL INFILE` on MySQL and MariaDB. Importing a 1,000,000-row CSV file took 6.6 s instead
+of 18.7 s on PostgreSQL, 8.4 s instead of 18.7 s on MySQL and 6.4 s instead of 12.6 s on MariaDB.
+
+```php
+Batch::import(new Order, storage_path('orders.csv'), ['fast' => true]);
+```
+
+- Only the default `insert` mode, and no `DB::raw()` values. Enums, JSON casts and timestamps work as
+  usual. The chunk size defaults to 10,000 rows.
+- MySQL and MariaDB need `LOCAL INFILE` allowed on both sides: add
+  `PDO::MYSQL_ATTR_LOCAL_INFILE => true` to the connection's `options` in `config/database.php`, and
+  set `local_infile = ON` on the server (MySQL 8 ships with it off).
+- `LOAD DATA LOCAL` stores bad values (a word in a number column) with a warning instead of failing.
+  Batch checks the warnings and throws, so with the default `atomic` import nothing is written.
+- On SQLite and other databases, `fast` imports as usual.
 
 ## Split a large file
 
@@ -270,6 +304,36 @@ Batch::splitFile($path, lines: 50000, bytes: 50_000_000);   // whichever comes f
 - Records are copied byte for byte, so quoting and line endings don't change.
 - Parts go next to the file, or into the `directory` option. An existing part throws, unless
   `'overwrite' => true`. A `.gz` file is read and split into plain parts.
+
+# Export
+
+`export()` writes the rows a query matches to a CSV, TSV or JSON Lines file, also gzipped, a chunk at
+a time with constant memory:
+
+```php
+Batch::export(User::where('active', true), storage_path('users.csv'), [
+    'columns' => ['id', 'email', 'name'],
+    'maxRows' => 100000,                  // users-001.csv, users-002.csv, ...
+]);
+// ['totalRows' => 250000, 'files' => ['.../users-001.csv', '.../users-002.csv', '.../users-003.csv']]
+
+User::where('active', true)->exportTo(storage_path('users.jsonl'));   // on the query
+```
+
+| Option | Default | |
+|---|---|---|
+| `columns` | the query's select, or every column | the columns to export |
+| `format` | from the extension | `'csv'`, `'tsv'` or `'jsonl'` |
+| `header` | `true` | write the column names first in CSV files |
+| `delimiter`, `enclosure` | `,` (tab for TSV), `"` | |
+| `maxRows` | | rows per file; the parts are numbered |
+| `chunk` | `1000` | rows per query |
+| `overwrite` | `false` | replace existing files instead of throwing |
+| `transform` | | `fn (array $row): ?array`; `null` leaves the row out |
+| `onChunk` | | `fn (int $written)`, after every chunk |
+
+Rows are read in primary key order (`DB::table()` queries use `id`), so the query can't have a limit
+or offset. CSV files are written the RFC 4180 way and can be imported again with `import()`.
 
 # Delete
 
@@ -339,6 +403,7 @@ Log::where('created_at', '<', now()->subYear())->deleteInChunks(10000);
 User::where('active', false)->updateInChunks(['status' => 'archived']);
 Order::where('created_at', '<', '2020-01-01')->archiveTo('orders_archive');
 DB::table('logs')->where('level', 'debug')->deleteInChunks();
+User::where('active', true)->exportTo(storage_path('users.csv'));
 ```
 
 - All three return the number of rows they changed. `sleepMs` pauses between chunks, to go easy on
@@ -379,6 +444,73 @@ Batch::upsert(new User, [
   transaction.
 - The returned count comes from the database: MySQL and MariaDB count an updated row as 2.
 
+## Counters
+
+Combine the stored value with the new one instead of replacing it, for stock levels, totals or
+high scores:
+
+```php
+Batch::upsert(new Stock, [
+    ['sku' => 'A1', 'qty' => 5],   // exists: qty = qty + 5
+    ['sku' => 'B2', 'qty' => 10],  // new: inserted with qty 10
+], ['sku'], ['qty' => ['+']]);
+```
+
+`['+']` adds, `['-']` subtracts, `['max']` keeps the larger value and `['min']` the smaller one. A
+stored `NULL` counts as 0 for `+` and `-`, and is replaced for `max` and `min`. Counter and plain
+columns can be mixed: `['name', 'qty' => ['+']]`.
+
+## Update only when the new row wins
+
+`onlyIf` updates an existing row only when the new value compares that way with the stored one,
+or the stored one is `NULL`. New rows are always inserted:
+
+```php
+// Rows from an external API: keep whichever version was changed last.
+Batch::upsert(new Product, $rows, ['sku'], null, ['onlyIf' => ['updated_at' => '>']]);
+```
+
+The operators are `>`, `>=`, `<`, `<=` and `<>`. Several columns must all match. On MySQL and
+MariaDB at most one `onlyIf` column can also be updated.
+
+## Get the rows back
+
+`upsertReturning()` takes the same arguments as `upsert()`, plus the columns to return, and gives
+back every row of the batch as it is stored afterwards, in the order of the input:
+
+```php
+$users = Batch::upsertReturning(new User, $rows, ['email'], ['name'], ['id', 'email']);
+// [['id' => 7, 'email' => 'ali@example.com'], ['id' => 102, 'email' => 'sara@example.com']]
+```
+
+The rows are read back by their `uniqueBy` values in the same transaction, so this works the same
+on every database, MySQL included. Rows an `onlyIf` condition left alone are returned as stored.
+
+# Insert and report the skipped rows
+
+`insertOrIgnoreRows()` inserts rows, skips the ones that hit a unique key, like `insertOrIgnore()`,
+and tells you exactly which ones were skipped:
+
+```php
+$result = Batch::insertOrIgnoreRows(new User, $rows, ['email']);
+// ['inserted' => 98, 'skipped' => [['email' => 'dup@example.com', 'name' => 'Ali'], ...]]
+```
+
+- The second argument names the columns that identify a row; the skipped rows are returned as given.
+- A key given twice in the list is inserted once and reported as skipped the second time.
+- PostgreSQL and SQLite report with `RETURNING`. MySQL and MariaDB need an auto-incrementing primary
+  key that the rows don't set.
+- It is exact also while other connections insert the same keys. Like any `INSERT`, inserting the
+  same keys from several connections at once can deadlock: retry the call when it does.
+
+# Turn timestamps off
+
+Laravel's `withoutTimestamps()` works with every Batch method:
+
+```php
+User::withoutTimestamps(fn () => Batch::update(new User, $rows));  // updated_at is left alone
+```
+
 # Preview the SQL without running it
 
 `pretend()` returns the statements Batch would run, with their bindings. Nothing is executed and no
@@ -418,6 +550,8 @@ User::batchInsertRows($rows, 500);
 User::batchInsertGetIds($rows, 500);
 User::batchImport(storage_path('users.csv'), ['mode' => 'upsert', 'uniqueBy' => ['email']]);
 User::batchUpsert($rows, ['email'], ['name']);
+User::batchUpsertReturning($rows, ['email'], ['name'], ['id', 'email']);
+User::batchInsertOrIgnoreRows($rows, ['email']);
 User::batchDeleteByKeys($rows, ['org_id', 'year']);
 ```
 

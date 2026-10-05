@@ -50,7 +50,7 @@ class ImportTest extends TestCase
 
         $result = $this->batch()->import(new User, $path);
 
-        $this->assertSame(['totalRows' => 3, 'skipped' => 0], $result);
+        $this->assertSame(['totalRows' => 3, 'skipped' => 0, 'errors' => []], $result);
         $this->assertSame('Smith, "Al"', $this->row(1)->name);
         $this->assertSame('0912', $this->row(1)->phone);
         $this->assertSame("two\nlines", $this->row(2)->name);
@@ -164,7 +164,7 @@ class ImportTest extends TestCase
             },
         ]);
 
-        $this->assertSame(['totalRows' => 2, 'skipped' => 1], $result);
+        $this->assertSame(['totalRows' => 2, 'skipped' => 1, 'errors' => []], $result);
         $this->assertSame([2, 3, 4], $numbers);
         $this->assertSame('Ali', $this->row(1)->name);
         $this->assertNull($this->row(2)->name);
@@ -213,7 +213,7 @@ class ImportTest extends TestCase
             },
         ]);
 
-        $this->assertSame(['totalRows' => 2, 'skipped' => 3], $result);
+        $this->assertSame(['totalRows' => 2, 'skipped' => 3, 'errors' => []], $result);
         $this->assertSame([2, 3, 4], array_keys($errors));
         $this->assertStringContainsString('not valid JSON', $errors[2]);
         $this->assertStringContainsString('JSON object', $errors[3]);

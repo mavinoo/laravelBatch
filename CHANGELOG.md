@@ -3,6 +3,27 @@
 All notable changes to `mavinoo/laravel-batch` are documented here.
 Older releases are listed on the [GitHub releases page](https://github.com/mavinoo/laravelBatch/releases).
 
+## 3.3.0 - Unreleased
+
+### Added
+- Counter upserts: `upsert($table, $rows, ['sku'], ['qty' => ['+']])` adds to the stored value.
+  Also `['-']`, `['max']` and `['min']`, on every database.
+- Conditional upserts: the `onlyIf` option, e.g. `['onlyIf' => ['updated_at' => '>']]`, updates an
+  existing row only when the new value wins.
+- `upsertReturning()`: upsert and get every row of the batch back as stored, in input order.
+- `insertOrIgnoreRows()`: insert, skip duplicates, and report exactly which rows were skipped.
+- Documented and tested that `Model::withoutTimestamps()` turns timestamps off for every method (#97).
+- `import()` option `fast`: load with `COPY` on PostgreSQL and `LOAD DATA LOCAL INFILE` on MySQL and
+  MariaDB, 2 to 2.8 times faster. Bad values that MySQL would store with a warning throw instead.
+- `import()` option `rules`: validate each row with Laravel's validator; failing rows are skipped and
+  their messages returned in the new `errors` result, by row number.
+- `export()` and the `exportTo()` builder macro: write the rows a query matches to CSV, TSV or JSON
+  Lines files (also gzipped), a chunk at a time, optionally split into parts.
+
+### Changed
+- `upsert()` takes an optional fifth `$options` argument.
+- `import()` also returns an `errors` key.
+
 ## 3.2.0 - 2026-10-05
 
 ### Added
