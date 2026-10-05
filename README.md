@@ -185,6 +185,28 @@ Batch::insertRows(new User, [
 ], 500);
 ```
 
+## Insert and get the new ids
+
+`insertGetIds()` takes the same rows as `insertRows()` and returns the new auto-increment ids, in
+the same order as the rows:
+
+```php
+$ids = Batch::insertGetIds(new User, [
+    ['name' => 'Ali', 'email' => 'ali@example.com'],
+    ['name' => 'Sara', 'email' => 'sara@example.com'],
+]);
+
+// [101, 102]
+```
+
+- PostgreSQL returns the ids with `INSERT ... RETURNING`. On MySQL and MariaDB they are computed
+  from `LAST_INSERT_ID()` and `auto_increment_increment`, and on SQLite from `last_insert_rowid()`:
+  these databases give the rows of one multi-row `INSERT` consecutive ids, also while other
+  connections insert at the same time.
+- The model's primary key must be auto-incrementing, and the rows can't set it.
+- It's a separate method, so `insert()` and `insertRows()` don't pay for fetching ids.
+- Inside `pretend()` nothing runs, so it returns `[]`.
+
 # Delete
 
 Delete rows matched on one or more key columns:
@@ -255,6 +277,7 @@ User::batchUpdateByKeys($values, ['org_id', 'year']);
 User::batchUpdateMultipleCondition($items, 'id');
 User::batchInsert($columns, $values, 500);
 User::batchInsertRows($rows, 500);
+User::batchInsertGetIds($rows, 500);
 User::batchUpsert($rows, ['email'], ['name']);
 User::batchDeleteByKeys($rows, ['org_id', 'year']);
 ```

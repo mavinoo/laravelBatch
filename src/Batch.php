@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Grammar;
 use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use InvalidArgumentException;
 use Mavinoo\Batch\Support\JsonPath;
@@ -283,40 +284,11 @@ class Batch implements BatchInterface
             return ['totalRows' => 0, 'totalBatch' => $totalChunk, 'totalQuery' => 0];
         }
 
-        $rows = [];
-        foreach (array_values($values) as $i => $row) {
-            if (!is_array($row) || count($row) !== count($columns) || !count($columns)) {
-                throw new InvalidArgumentException(sprintf(
-                    'Row %d has %d values, but there are %d columns.',
-                    $i,
-                    is_array($row) ? count($row) : 0,
-                    count($columns)
-                ));
-            }
-
-            $rows[] = array_combine($columns, array_map([$this, 'enumValue'], array_values($row)));
-        }
-
-        $rows = $this->castRowsToJson($table, $rows);
-
-        if ($table->usesTimestamps()) {
-            $now = Carbon::now()->format($table->getDateFormat());
-
-            foreach ([$table->getCreatedAtColumn(), $table->getUpdatedAtColumn()] as $timestampColumn) {
-                if (is_null($timestampColumn) || in_array($timestampColumn, $columns)) {
-                    continue;
-                }
-
-                foreach ($rows as $key => $row) {
-                    $rows[$key][$timestampColumn] = $now;
-                }
-            }
-        }
+        $rows = $this->prepareInsertRows($table, $columns, $values);
 
         $connection = $this->db->connection($this->getConnectionName($table));
 
-        // Keep each statement under the driver's bound parameter limit.
-        $rowsPerQuery = max(1, min($totalChunk, intdiv($this->maxBindings($connection), count($rows[0]))));
+        $rowsPerQuery = $this->rowsPerInsert($connection, $totalChunk, count($rows[0]));
 
         return $this->transaction($connection, function () use ($connection, $table, $rows, $rowsPerQuery, $insertIgnore, $totalValues, $totalChunk) {
             $totalQuery = 0;
@@ -358,6 +330,106 @@ class Batch implements BatchInterface
         [$columns, $values] = $this->splitRows($rows);
 
         return $this->insert($table, $columns, $values, $batchSize, $insertIgnore);
+    }
+
+    /**
+     * Insert many rows given as column => value pairs and return their auto-increment ids,
+     * in the same order as the rows.
+     *
+     * On PostgreSQL the ids come from INSERT ... RETURNING. On MySQL and MariaDB they are
+     * computed from LAST_INSERT_ID(), and on SQLite from last_insert_rowid(): a multi-row
+     * INSERT gets consecutive ids there. Inside pretend() nothing runs, so it returns [].
+     *
+     * Example:
+     * ```
+     * $ids = Batch::insertGetIds(new User, [
+     *     ['name' => 'Ali', 'email' => 'ali@example.com'],
+     *     ['name' => 'Sara', 'email' => 'sara@example.com'],
+     * ]);
+     * // [101, 102]
+     * ```
+     *
+     * @param Model $table a model with an auto-incrementing primary key
+     * @param array<array-key, mixed> $rows rows of column => value pairs, all with the same columns
+     * @param int $batchSize rows per query (at least 100)
+     * @return list<int> the new ids, in the order of $rows
+     *
+     * @throws InvalidArgumentException when the key isn't auto-incrementing, a row sets it, or a row is malformed
+     */
+    public function insertGetIds(Model $table, array $rows, int $batchSize = 500): array
+    {
+        $keyName = $table->getKeyName();
+
+        if (!$table->getIncrementing()) {
+            throw new InvalidArgumentException('insertGetIds() needs a model with an auto-incrementing primary key.');
+        }
+
+        [$columns, $values] = $this->splitRows($rows);
+
+        if (!$values) {
+            return [];
+        }
+
+        if (in_array($keyName, $columns, true)) {
+            throw new InvalidArgumentException("Rows passed to insertGetIds() can't set the \"{$keyName}\" key; use insertRows() instead.");
+        }
+
+        $rows = $this->prepareInsertRows($table, $columns, $values);
+        $connection = $this->db->connection($this->getConnectionName($table));
+        $driver = $connection->getDriverName();
+
+        if (!in_array($driver, ['mysql', 'mariadb', 'pgsql', 'sqlite'], true)) {
+            throw new InvalidArgumentException("insertGetIds() is not supported on the \"{$driver}\" driver.");
+        }
+
+        $rowsPerQuery = $this->rowsPerInsert($connection, max(100, $batchSize), count($rows[0]));
+
+        return $this->transaction($connection, function () use ($connection, $table, $rows, $rowsPerQuery, $keyName, $driver) {
+            $runner = $this->runner($connection);
+            $pretending = !is_null($this->pretended);
+            $ids = [];
+            $step = null;
+
+            foreach (array_chunk($rows, $rowsPerQuery) as $chunk) {
+                $query = $this->baseQuery($connection, $table);
+                $bindings = $query->cleanBindings(Arr::flatten($chunk, 1));
+
+                if ($driver === 'pgsql') {
+                    $sql = $query->getGrammar()->compileInsertGetId($query, $chunk, $keyName);
+
+                    if ($pretending) {
+                        $runner->insert($sql, $bindings);
+                        continue;
+                    }
+
+                    foreach ($connection->selectFromWriteConnection($sql, $bindings) as $row) {
+                        $ids[] = $this->toId(((array) $row)[$keyName] ?? null);
+                    }
+                    continue;
+                }
+
+                $runner->insert($query->getGrammar()->compileInsert($query, $chunk), $bindings);
+
+                if ($pretending) {
+                    continue;
+                }
+
+                if ($driver === 'sqlite') {
+                    // last_insert_rowid() is the id of the chunk's last row.
+                    $last = $this->selectId($connection, 'SELECT last_insert_rowid() AS id');
+                    array_push($ids, ...range($last - count($chunk) + 1, $last));
+                } else {
+                    // LAST_INSERT_ID() is the id of the chunk's first row.
+                    $first = $this->selectId($connection, 'SELECT LAST_INSERT_ID() AS id');
+                    $step ??= $this->selectId($connection, 'SELECT @@auto_increment_increment AS id');
+                    foreach (array_keys($chunk) as $i) {
+                        $ids[] = $first + $i * $step;
+                    }
+                }
+            }
+
+            return $ids;
+        });
     }
 
     /**
@@ -1112,6 +1184,85 @@ class Batch implements BatchInterface
         }
 
         return $columns;
+    }
+
+    /**
+     * Validate rows of values for insert(), and turn them into column => value rows with enums,
+     * JSON casts and timestamps applied.
+     *
+     * @param array<int, string> $columns
+     * @param array<array-key, mixed> $values
+     * @return list<array<string, mixed>>
+     */
+    private function prepareInsertRows(Model $table, array $columns, array $values): array
+    {
+        $rows = [];
+        foreach (array_values($values) as $i => $row) {
+            if (!is_array($row) || count($row) !== count($columns) || !count($columns)) {
+                throw new InvalidArgumentException(sprintf(
+                    'Row %d has %d values, but there are %d columns.',
+                    $i,
+                    is_array($row) ? count($row) : 0,
+                    count($columns)
+                ));
+            }
+
+            $rows[] = array_combine($columns, array_map([$this, 'enumValue'], array_values($row)));
+        }
+
+        $rows = $this->castRowsToJson($table, $rows);
+
+        if ($table->usesTimestamps()) {
+            $now = Carbon::now()->format($table->getDateFormat());
+
+            foreach ([$table->getCreatedAtColumn(), $table->getUpdatedAtColumn()] as $timestampColumn) {
+                if (is_null($timestampColumn) || in_array($timestampColumn, $columns)) {
+                    continue;
+                }
+
+                foreach ($rows as $key => $row) {
+                    $rows[$key][$timestampColumn] = $now;
+                }
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Rows per INSERT: $batchSize, kept under the driver's bound parameter limit.
+     *
+     * @return positive-int
+     */
+    private function rowsPerInsert(Connection $connection, int $batchSize, int $columnCount): int
+    {
+        return max(1, min($batchSize, intdiv($this->maxBindings($connection), max(1, $columnCount))));
+    }
+
+    /**
+     * Run a SELECT that returns one integer, aliased "id", on the write connection.
+     */
+    private function selectId(Connection $connection, string $sql): int
+    {
+        $row = $connection->selectOne($sql, [], false);
+
+        return $this->toId(is_null($row) ? null : ((array) $row)['id']);
+    }
+
+    /**
+     * An auto-increment id as returned by the database.
+     */
+    private function toId(mixed $value): int
+    {
+        if (is_int($value)) {
+            return $value;
+        }
+
+        if (is_string($value) && preg_match('/^\d+$/', $value)) {
+            return (int) $value;
+        }
+
+        throw new \UnexpectedValueException('The database did not return an auto-increment id.');
     }
 
     /**

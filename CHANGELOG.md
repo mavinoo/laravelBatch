@@ -10,6 +10,8 @@ Older releases are listed on the [GitHub releases page](https://github.com/mavin
   missing objects are created and `updated_at` only changes when the document changes.
 - Arrays and collections for columns the model casts to JSON are encoded the way the model stores
   them, in every update, insert and upsert method.
+- `insertGetIds()` and `HasBatch::batchInsertGetIds()`: insert rows and get their auto-increment ids,
+  in row order (#48).
 
 ### Fixed
 - Updating a PostgreSQL `json` column failed with "operator does not exist: json <> unknown".
