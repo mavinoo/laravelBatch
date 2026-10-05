@@ -3,6 +3,18 @@
 All notable changes to `mavinoo/laravel-batch` are documented here.
 Older releases are listed on the [GitHub releases page](https://github.com/mavinoo/laravelBatch/releases).
 
+## 3.3.0 - Unreleased
+
+### Added
+- Counter upserts: `upsert($table, $rows, ['sku'], ['qty' => ['+']])` adds to the stored value.
+  Also `['-']`, `['max']` and `['min']`, on every database.
+- Conditional upserts: the `onlyIf` option, e.g. `['onlyIf' => ['updated_at' => '>']]`, updates an
+  existing row only when the new value wins.
+- Documented and tested that `Model::withoutTimestamps()` turns timestamps off for every method (#97).
+
+### Changed
+- `upsert()` takes an optional fifth `$options` argument.
+
 ## 3.2.0 - 2026-10-05
 
 ### Added

@@ -379,6 +379,43 @@ Batch::upsert(new User, [
   transaction.
 - The returned count comes from the database: MySQL and MariaDB count an updated row as 2.
 
+## Counters
+
+Combine the stored value with the new one instead of replacing it, for stock levels, totals or
+high scores:
+
+```php
+Batch::upsert(new Stock, [
+    ['sku' => 'A1', 'qty' => 5],   // exists: qty = qty + 5
+    ['sku' => 'B2', 'qty' => 10],  // new: inserted with qty 10
+], ['sku'], ['qty' => ['+']]);
+```
+
+`['+']` adds, `['-']` subtracts, `['max']` keeps the larger value and `['min']` the smaller one. A
+stored `NULL` counts as 0 for `+` and `-`, and is replaced for `max` and `min`. Counter and plain
+columns can be mixed: `['name', 'qty' => ['+']]`.
+
+## Update only when the new row wins
+
+`onlyIf` updates an existing row only when the new value compares that way with the stored one,
+or the stored one is `NULL`. New rows are always inserted:
+
+```php
+// Rows from an external API: keep whichever version was changed last.
+Batch::upsert(new Product, $rows, ['sku'], null, ['onlyIf' => ['updated_at' => '>']]);
+```
+
+The operators are `>`, `>=`, `<`, `<=` and `<>`. Several columns must all match. On MySQL and
+MariaDB at most one `onlyIf` column can also be updated.
+
+# Turn timestamps off
+
+Laravel's `withoutTimestamps()` works with every Batch method:
+
+```php
+User::withoutTimestamps(fn () => Batch::update(new User, $rows));  // updated_at is left alone
+```
+
 # Preview the SQL without running it
 
 `pretend()` returns the statements Batch would run, with their bindings. Nothing is executed and no

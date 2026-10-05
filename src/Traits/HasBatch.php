@@ -239,12 +239,13 @@ trait HasBatch
      * @param  array<array-key, mixed>  $values
      * @param  array<int, string>|string  $uniqueBy
      * @param  array<array-key, mixed>|null  $update
+     * @param  array<string, mixed>  $options
      *
      * @return int number of affected rows, as reported by the database
      */
-    public static function batchUpsert(array $values, $uniqueBy, ?array $update = null): int
+    public static function batchUpsert(array $values, $uniqueBy, ?array $update = null, array $options = []): int
     {
-        return app(Batch::class)->upsert(self::batchModel(), $values, $uniqueBy, $update);
+        return app(Batch::class)->upsert(self::batchModel(), $values, $uniqueBy, $update, $options);
     }
 
     /**

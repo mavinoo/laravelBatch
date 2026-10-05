@@ -16,6 +16,7 @@ use Illuminate\Support\Carbon;
 use InvalidArgumentException;
 use Mavinoo\Batch\Support\FileSplitter;
 use Mavinoo\Batch\Support\JsonPath;
+use Mavinoo\Batch\Support\RawSql;
 use Mavinoo\Batch\Support\RecordingConnection;
 use Mavinoo\Batch\Support\RowReader;
 
@@ -797,6 +798,111 @@ class Batch implements BatchInterface
     }
 
     /**
+     * Turn the counter (['+'], ['-'], ['max'], ['min']) and onlyIf parts of an upsert into the raw
+     * SET expressions Laravel's upsert() takes, for the connection's database.
+     *
+     * @param list<string> $columns the columns of the rows
+     * @param array<array-key, mixed>|null $update
+     * @param mixed $onlyIf
+     * @return array<array-key, mixed>|null
+     */
+    private function upsertAssignments(Connection $connection, Model $table, array $columns, ?array $update, mixed $onlyIf): ?array
+    {
+        if (!is_array($onlyIf)) {
+            throw new InvalidArgumentException('The upsert "onlyIf" option must be an array of column => operator.');
+        }
+
+        if (!$onlyIf && !array_filter($update ?? [], 'is_array')) {
+            return $update; // nothing special: let Laravel compile it
+        }
+
+        $grammar = $connection->getQueryGrammar();
+        $driver = $connection->getDriverName();
+        $update ??= $columns;
+
+        // Eloquent would add updated_at as a plain column, and fills it in every row; add it here so
+        // onlyIf covers it too.
+        $updatedAt = $table->usesTimestamps() ? $table->getUpdatedAtColumn() : null;
+        if ($updatedAt) {
+            $columns[] = $updatedAt;
+            if (!array_key_exists($updatedAt, $update) && !in_array($updatedAt, $update, true)) {
+                $update[] = $updatedAt;
+            }
+        }
+
+        $tableName = $table->getTable();
+        $existing = fn (string $column): string => $grammar->wrap($tableName . '.' . $column);
+        $incoming = function (string $column) use ($grammar, $driver, $connection, $columns): string {
+            if (!in_array($column, $columns, true)) {
+                throw new InvalidArgumentException("The upsert uses the new value of \"{$column}\", but the rows don't have that column.");
+            }
+
+            // The same references Laravel's grammars use for the new row (never table-prefixed).
+            if (in_array($driver, ['pgsql', 'sqlite'], true)) {
+                return $grammar->wrap('excluded') . '.' . $grammar->wrap($column);
+            }
+
+            return $connection->getConfig('use_upsert_alias')
+                ? $grammar->wrap('laravel_upsert_alias') . '.' . $grammar->wrap($column)
+                : 'VALUES(' . $grammar->wrap($column) . ')';
+        };
+
+        $assignments = [];
+        foreach ($update as $key => $value) {
+            if (is_int($key)) {
+                if (!is_string($value)) {
+                    throw new InvalidArgumentException('upsert() update columns must be column names.');
+                }
+                $assignments[$value] = $incoming($value);
+            } elseif ($value instanceof Expression) {
+                $assignments[$key] = (string) $grammar->getValue($value);
+            } elseif (is_array($value) && count($value) === 1 && in_array($value[0] ?? null, ['+', '-', 'max', 'min'], true)) {
+                $old = $existing($key);
+                $new = $incoming($key);
+                $assignments[$key] = match ($value[0]) {
+                    '+' => "COALESCE({$old}, 0) + {$new}",
+                    '-' => "COALESCE({$old}, 0) - {$new}",
+                    'max' => "CASE WHEN {$old} IS NULL OR {$new} > {$old} THEN {$new} ELSE {$old} END",
+                    'min' => "CASE WHEN {$old} IS NULL OR {$new} < {$old} THEN {$new} ELSE {$old} END",
+                };
+            } else {
+                throw new InvalidArgumentException(
+                    "Invalid upsert update for \"{$key}\": use ['+'], ['-'], ['max'], ['min'] or DB::raw()."
+                );
+            }
+        }
+
+        if ($onlyIf) {
+            $conditions = [];
+            foreach ($onlyIf as $column => $operator) {
+                if (!is_string($column) || !in_array($operator, ['>', '>=', '<', '<=', '<>', '!='], true)) {
+                    throw new InvalidArgumentException('The upsert "onlyIf" option must map columns to >, >=, <, <=, <> or !=.');
+                }
+                $conditions[] = '(' . $existing($column) . ' IS NULL OR ' . $incoming($column) . ' ' . $operator . ' ' . $existing($column) . ')';
+            }
+            $condition = implode(' AND ', $conditions);
+
+            // MySQL assigns columns left to right and later ones see the new values, so the
+            // columns the condition reads are assigned last. Two of them can't both be updated.
+            if (in_array($driver, ['mysql', 'mariadb'], true)) {
+                $read = array_intersect_key($assignments, $onlyIf);
+                if (count($read) > 1) {
+                    throw new InvalidArgumentException(
+                        'MySQL cannot update more than one "onlyIf" column in an upsert; leave all but one out of $update.'
+                    );
+                }
+                $assignments = array_diff_key($assignments, $read) + $read;
+            }
+
+            foreach ($assignments as $column => $sql) {
+                $assignments[$column] = "CASE WHEN {$condition} THEN {$sql} ELSE {$existing($column)} END";
+            }
+        }
+
+        return array_map(fn (string $sql) => new RawSql($sql), $assignments);
+    }
+
+    /**
      * Make the rows a query matches look like a list: insert new rows, update existing ones and
      * delete the rows the list doesn't have, in one transaction.
      *
@@ -925,18 +1031,26 @@ class Batch implements BatchInterface
      *     ['email' => 'ali@example.com', 'name' => 'Ali', 'score' => 90],
      *     ['email' => 'sara@example.com', 'name' => 'Sara', 'score' => 75],
      * ], ['email'], ['name', 'score']);
+     *
+     * Batch::upsert(new Stock, $rows, ['sku'], ['qty' => ['+']]);                           // add to the stored qty
+     * Batch::upsert(new Product, $rows, ['sku'], null, ['onlyIf' => ['updated_at' => '>']]); // newer rows win
      * ```
      *
      * @param Model $table
      * @param array<array-key, mixed> $values rows of column => value pairs, all with the same columns
      * @param array<int, string>|string $uniqueBy the column(s) that identify an existing row
-     * @param array<array-key, mixed>|null $update columns to update on existing rows; null updates every given column
+     * @param array<array-key, mixed>|null $update columns to update on existing rows; null updates every given column.
+     *        A column => ['+'], ['-'], ['max'] or ['min'] combines the stored value with the new one.
+     * @param array<string, mixed> $options onlyIf: [column => '>', ...] updates an existing row only when
+     *        the new value compares that way with the stored one (or the stored one is null)
      * @return int number of affected rows, as reported by the database
      *
-     * @throws InvalidArgumentException when $uniqueBy or $update is empty or a row is malformed
+     * @throws InvalidArgumentException when $uniqueBy or $update is empty, a row is malformed or an option is invalid
      */
-    public function upsert(Model $table, array $values, $uniqueBy, ?array $update = null): int
+    public function upsert(Model $table, array $values, $uniqueBy, ?array $update = null, array $options = []): int
     {
+        $this->assertKnownOptions('upsert', $options, ['onlyIf']);
+
         $uniqueBy = array_values((array) $uniqueBy);
 
         if (!$uniqueBy) {
@@ -969,6 +1083,7 @@ class Batch implements BatchInterface
         $rows = $this->castRowsToJson($table, $rows);
 
         $connection = $this->db->connection($this->getConnectionName($table));
+        $update = $this->upsertAssignments($connection, $table, $columns, $update, $options['onlyIf'] ?? []);
 
         // Keep each statement under the driver's bound parameter limit, counting the timestamps
         // Eloquent adds and the values bound once per statement for computed updates.
