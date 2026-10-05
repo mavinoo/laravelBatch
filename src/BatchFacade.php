@@ -20,6 +20,8 @@ use Illuminate\Support\Facades\Facade;
  * @method static array{inserted: int, updated: int, deleted: int} sync(\Illuminate\Database\Eloquent\Builder<\Illuminate\Database\Eloquent\Model> $scope, iterable<mixed> $rows, array<int, string>|string $uniqueBy, ?array<array-key, mixed> $update = null, bool $force = false, bool $allowEmpty = false, int $chunk = 1000)
  * @method static int deleteByKeys(\Illuminate\Database\Eloquent\Model $table, array<array-key, mixed> $values, array<array-key, mixed> $keys, bool $force = false)
  * @method static int upsert(\Illuminate\Database\Eloquent\Model $table, array<array-key, mixed> $values, array<int, string>|string $uniqueBy, ?array<array-key, mixed> $update = null, array<string, mixed> $options = [])
+ * @method static list<array<string, mixed>> upsertReturning(\Illuminate\Database\Eloquent\Model $table, array<array-key, mixed> $values, array<int, string>|string $uniqueBy, ?array<array-key, mixed> $update = null, list<string> $returning = ['*'], array<string, mixed> $options = [])
+ * @method static array{inserted: int, skipped: list<array<string, mixed>>} insertOrIgnoreRows(\Illuminate\Database\Eloquent\Model $table, array<array-key, mixed> $rows, array<int, string>|string $uniqueBy, int $batchSize = 500)
  * @method static list<array{sql: string, bindings: array<mixed>, connection: string}> pretend(callable $callback)
  *
  * @see \Mavinoo\Batch\Batch

@@ -249,6 +249,36 @@ trait HasBatch
     }
 
     /**
+     * Upsert rows and return them as they are stored afterwards, in input order.
+     *
+     * @param  array<array-key, mixed>  $values
+     * @param  array<int, string>|string  $uniqueBy
+     * @param  array<array-key, mixed>|null  $update
+     * @param  list<string>  $returning
+     * @param  array<string, mixed>  $options
+     *
+     * @return list<array<string, mixed>>
+     */
+    public static function batchUpsertReturning(array $values, $uniqueBy, ?array $update = null, array $returning = ['*'], array $options = []): array
+    {
+        return app(Batch::class)->upsertReturning(self::batchModel(), $values, $uniqueBy, $update, $returning, $options);
+    }
+
+    /**
+     * Insert rows, skip the ones that hit a unique key, and report which were skipped.
+     *
+     * @param  array<array-key, mixed>  $rows
+     * @param  array<int, string>|string  $uniqueBy
+     * @param  int  $batchSize
+     *
+     * @return array{inserted: int, skipped: list<array<string, mixed>>}
+     */
+    public static function batchInsertOrIgnoreRows(array $rows, array|string $uniqueBy, int $batchSize = 500): array
+    {
+        return app(Batch::class)->insertOrIgnoreRows(self::batchModel(), $rows, $uniqueBy, $batchSize);
+    }
+
+    /**
      * Delete many rows, matched on one or more key columns. Soft deletes unless $force is true.
      *
      * @param  array<array-key, mixed>  $values

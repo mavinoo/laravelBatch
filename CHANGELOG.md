@@ -10,6 +10,8 @@ Older releases are listed on the [GitHub releases page](https://github.com/mavin
   Also `['-']`, `['max']` and `['min']`, on every database.
 - Conditional upserts: the `onlyIf` option, e.g. `['onlyIf' => ['updated_at' => '>']]`, updates an
   existing row only when the new value wins.
+- `upsertReturning()`: upsert and get every row of the batch back as stored, in input order.
+- `insertOrIgnoreRows()`: insert, skip duplicates, and report exactly which rows were skipped.
 - Documented and tested that `Model::withoutTimestamps()` turns timestamps off for every method (#97).
 
 ### Changed

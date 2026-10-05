@@ -408,6 +408,36 @@ Batch::upsert(new Product, $rows, ['sku'], null, ['onlyIf' => ['updated_at' => '
 The operators are `>`, `>=`, `<`, `<=` and `<>`. Several columns must all match. On MySQL and
 MariaDB at most one `onlyIf` column can also be updated.
 
+## Get the rows back
+
+`upsertReturning()` takes the same arguments as `upsert()`, plus the columns to return, and gives
+back every row of the batch as it is stored afterwards, in the order of the input:
+
+```php
+$users = Batch::upsertReturning(new User, $rows, ['email'], ['name'], ['id', 'email']);
+// [['id' => 7, 'email' => 'ali@example.com'], ['id' => 102, 'email' => 'sara@example.com']]
+```
+
+The rows are read back by their `uniqueBy` values in the same transaction, so this works the same
+on every database, MySQL included. Rows an `onlyIf` condition left alone are returned as stored.
+
+# Insert and report the skipped rows
+
+`insertOrIgnoreRows()` inserts rows, skips the ones that hit a unique key, like `insertOrIgnore()`,
+and tells you exactly which ones were skipped:
+
+```php
+$result = Batch::insertOrIgnoreRows(new User, $rows, ['email']);
+// ['inserted' => 98, 'skipped' => [['email' => 'dup@example.com', 'name' => 'Ali'], ...]]
+```
+
+- The second argument names the columns that identify a row; the skipped rows are returned as given.
+- A key given twice in the list is inserted once and reported as skipped the second time.
+- PostgreSQL and SQLite report with `RETURNING`. MySQL and MariaDB need an auto-incrementing primary
+  key that the rows don't set.
+- It is exact also while other connections insert the same keys. Like any `INSERT`, inserting the
+  same keys from several connections at once can deadlock: retry the call when it does.
+
 # Turn timestamps off
 
 Laravel's `withoutTimestamps()` works with every Batch method:
@@ -455,6 +485,8 @@ User::batchInsertRows($rows, 500);
 User::batchInsertGetIds($rows, 500);
 User::batchImport(storage_path('users.csv'), ['mode' => 'upsert', 'uniqueBy' => ['email']]);
 User::batchUpsert($rows, ['email'], ['name']);
+User::batchUpsertReturning($rows, ['email'], ['name'], ['id', 'email']);
+User::batchInsertOrIgnoreRows($rows, ['email']);
 User::batchDeleteByKeys($rows, ['org_id', 'year']);
 ```
 

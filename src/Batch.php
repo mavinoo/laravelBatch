@@ -798,6 +798,30 @@ class Batch implements BatchInterface
     }
 
     /**
+     * A row's key values as a string, the same for values the database returns and values given.
+     *
+     * @param array<array-key, mixed> $row
+     * @param list<string> $keys
+     */
+    private function keyString(Connection $connection, array $row, array $keys): string
+    {
+        $values = [];
+        foreach ($keys as $key) {
+            $value = $this->enumValue($row[$key] ?? null);
+
+            if ($value instanceof \DateTimeInterface) {
+                $value = $value->format($connection->getQueryGrammar()->getDateFormat());
+            } elseif (is_bool($value)) {
+                $value = (int) $value;
+            }
+
+            $values[] = is_null($value) ? null : (is_scalar($value) ? (string) $value : serialize($value));
+        }
+
+        return json_encode($values, JSON_THROW_ON_ERROR);
+    }
+
+    /**
      * Turn the counter (['+'], ['-'], ['max'], ['min']) and onlyIf parts of an upsert into the raw
      * SET expressions Laravel's upsert() takes, for the connection's database.
      *
@@ -900,6 +924,198 @@ class Batch implements BatchInterface
         }
 
         return array_map(fn (string $sql) => new RawSql($sql), $assignments);
+    }
+
+    /**
+     * Upsert rows and return them as they are stored afterwards, in the order of $values.
+     *
+     * The rows are read back by their $uniqueBy values in the same transaction, so the result is
+     * the same on every database: inserted rows, updated rows, and rows an onlyIf condition left
+     * alone. Inside pretend() nothing runs, so it returns [].
+     *
+     * Example:
+     * ```
+     * $users = Batch::upsertReturning(new User, $rows, ['email'], ['name'], ['id', 'email']);
+     * // [['id' => 7, 'email' => 'ali@example.com'], ['id' => 102, 'email' => 'sara@example.com']]
+     * ```
+     *
+     * @param array<array-key, mixed> $values rows of column => value pairs, all with the same columns
+     * @param array<int, string>|string $uniqueBy the column(s) that identify a row
+     * @param array<array-key, mixed>|null $update see upsert()
+     * @param list<string> $returning columns to return, default every column
+     * @param array<string, mixed> $options see upsert()
+     * @return list<array<string, mixed>>
+     */
+    public function upsertReturning(Model $table, array $values, $uniqueBy, ?array $update = null, array $returning = ['*'], array $options = []): array
+    {
+        $keys = $this->keyColumns((array) $uniqueBy, 'upsertReturning');
+        $connection = $this->db->connection($this->getConnectionName($table));
+
+        return $this->transaction($connection, function () use ($table, $values, $keys, $update, $returning, $options, $connection): array {
+            $this->upsert($table, $values, $keys, $update, $options);
+
+            if (!is_null($this->pretended)) {
+                return [];
+            }
+
+            $matches = [];
+            foreach ($values as $row) {
+                /** @var array<string, mixed> $row */
+                $match = array_map([$this, 'enumValue'], array_intersect_key($row, array_flip($keys)));
+                $matches[$this->keyString($connection, $match, $keys)] = $match;
+            }
+
+            $select = $returning === ['*'] ? ['*'] : array_values(array_unique(array_merge($returning, $keys)));
+            $found = [];
+            $perQuery = max(1, intdiv($this->maxBindings($connection), count($keys)));
+
+            foreach (array_chunk($matches, $perQuery) as $chunk) {
+                $query = $connection->table($table->getTable())->select($select)->where(function (QueryBuilder $query) use ($chunk) {
+                    foreach ($chunk as $match) {
+                        $query->orWhere(fn (QueryBuilder $row) => $row->where($match));
+                    }
+                });
+
+                foreach ($query->get() as $row) {
+                    $row = (array) $row;
+                    $found[$this->keyString($connection, $row, $keys)] = $returning === ['*'] ? $row : array_intersect_key($row, array_flip($returning));
+                }
+            }
+
+            // In the order of $values. Rows the database matched differently (a case-insensitive
+            // collation, for example) come last.
+            $result = [];
+            foreach (array_keys($matches) as $key) {
+                if (isset($found[$key])) {
+                    $result[] = $found[$key];
+                    unset($found[$key]);
+                }
+            }
+
+            return array_merge($result, array_values($found));
+        });
+    }
+
+    /**
+     * Insert rows, skip the ones that hit a unique key, and report exactly which were skipped.
+     *
+     * PostgreSQL and SQLite tell with RETURNING. MySQL and MariaDB need an auto-incrementing
+     * primary key that the rows don't set: a multi-row INSERT gets one block of ids, so the rows
+     * of the block are the inserted ones. Inside pretend() nothing runs.
+     *
+     * Example:
+     * ```
+     * $result = Batch::insertOrIgnoreRows(new User, $rows, ['email']);
+     * // ['inserted' => 98, 'skipped' => [['email' => 'dup@example.com', ...], ...]]
+     * ```
+     *
+     * @param array<array-key, mixed> $rows rows of column => value pairs, all with the same columns
+     * @param array<int, string>|string $uniqueBy the column(s) that identify a row
+     * @param int $batchSize rows per query (at least 100)
+     * @return array{inserted: int, skipped: list<array<string, mixed>>} the skipped rows as given
+     *
+     * @throws InvalidArgumentException for a malformed row, or on MySQL a model without an auto-incrementing key
+     */
+    public function insertOrIgnoreRows(Model $table, array $rows, array|string $uniqueBy, int $batchSize = 500): array
+    {
+        $keys = $this->keyColumns((array) $uniqueBy, 'insertOrIgnoreRows');
+        [$columns, $values] = $this->splitRows($rows);
+
+        if (!$values) {
+            return ['inserted' => 0, 'skipped' => []];
+        }
+
+        foreach ($keys as $key) {
+            if (!in_array($key, $columns, true)) {
+                throw new InvalidArgumentException("Every row must contain the \"{$key}\" column used to find skipped rows.");
+            }
+        }
+
+        $connection = $this->db->connection($this->getConnectionName($table));
+        $driver = $connection->getDriverName();
+        $keyName = $table->getKeyName();
+
+        if (in_array($driver, ['mysql', 'mariadb'], true) && (!$table->getIncrementing() || in_array($keyName, $columns, true))) {
+            throw new InvalidArgumentException(
+                'On MySQL and MariaDB, insertOrIgnoreRows() needs a model with an auto-incrementing primary key that the rows don\'t set.'
+            );
+        }
+
+        if (!in_array($driver, ['mysql', 'mariadb', 'pgsql', 'sqlite'], true)) {
+            throw new InvalidArgumentException("insertOrIgnoreRows() is not supported on the \"{$driver}\" driver.");
+        }
+
+        $prepared = $this->prepareInsertRows($table, $columns, $values);
+        $original = array_values($rows);
+        $rowsPerQuery = $this->rowsPerInsert($connection, max(100, $batchSize), count($prepared[0]));
+
+        return $this->transaction($connection, function () use ($connection, $table, $prepared, $original, $rowsPerQuery, $keys, $keyName, $driver): array {
+            $runner = $this->runner($connection);
+            $inserted = 0;
+            $skipped = [];
+
+            foreach (array_chunk($prepared, $rowsPerQuery, true) as $chunk) {
+                $query = $this->baseQuery($connection, $table);
+                $bindings = $query->cleanBindings(Arr::flatten($chunk, 1));
+                $sql = $query->getGrammar()->compileInsertOrIgnore($query, array_values($chunk));
+
+                if (in_array($driver, ['pgsql', 'sqlite'], true)) {
+                    $sql .= ' returning ' . $query->getGrammar()->columnize($keys);
+
+                    if (!is_null($this->pretended)) {
+                        $runner->insert($sql, $bindings);
+                        continue;
+                    }
+
+                    $returned = array_map(fn ($row) => (array) $row, $connection->selectFromWriteConnection($sql, $bindings));
+                } else {
+                    $affected = $runner->affectingStatement($sql, $bindings);
+
+                    if (!is_null($this->pretended)) {
+                        continue;
+                    }
+
+                    if ($affected === 0) {
+                        $returned = [];
+                    } elseif ($affected === count($chunk)) {
+                        $returned = array_values($chunk);
+                    } else {
+                        // The chunk got one block of ids and LAST_INSERT_ID() is its first inserted
+                        // row. Other connections' ids come before or after the block, so the inserted
+                        // rows are the first $affected rows from there.
+                        $first = $this->selectId($connection, 'SELECT LAST_INSERT_ID() AS id');
+                        $returned = array_map(fn ($row) => (array) $row, $connection->table($table->getTable())
+                            ->select($keys)
+                            ->where($keyName, '>=', $first)
+                            ->orderBy($keyName)
+                            ->limit($affected)
+                            ->get()
+                            ->all());
+                    }
+                }
+
+                // Count each returned key once, so a key given twice in the chunk is inserted once.
+                $remaining = [];
+                foreach ($returned as $row) {
+                    $key = $this->keyString($connection, $row, $keys);
+                    $remaining[$key] = ($remaining[$key] ?? 0) + 1;
+                }
+
+                foreach ($chunk as $index => $row) {
+                    $key = $this->keyString($connection, $row, $keys);
+                    if (($remaining[$key] ?? 0) > 0) {
+                        $remaining[$key]--;
+                        $inserted++;
+                    } else {
+                        /** @var array<string, mixed> $skippedRow */
+                        $skippedRow = $original[$index];
+                        $skipped[] = $skippedRow;
+                    }
+                }
+            }
+
+            return ['inserted' => $inserted, 'skipped' => $skipped];
+        });
     }
 
     /**
