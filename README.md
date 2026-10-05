@@ -76,6 +76,35 @@ Batch::update(new User, [
 
 > **Never put user input inside `DB::raw()`.** Every other value is sent as a bound parameter and is safe.
 
+## JSON columns
+
+Set keys inside a JSON column with `->`, like Laravel's `update()`:
+
+```php
+Batch::update(new User, [
+    ['id' => 1, 'settings->theme' => 'dark', 'settings->notify->email' => false],
+    ['id' => 2, 'settings->theme' => 'light'],
+]);
+```
+
+- Other keys in the document are kept. Missing objects along the path are created, and a `NULL`
+  column starts as an empty object.
+- Values keep their JSON type: `false` is stored as `false`, arrays as JSON arrays or objects.
+  `DB::raw()` values are used as given.
+- Path keys are object keys; they can't contain quotes or backslashes.
+- A row can't set a column and a path inside it in the same call.
+- Works with every update method on MySQL, MariaDB, PostgreSQL and SQLite.
+
+For columns the model casts to JSON (`array`, `json`, `object`, `collection`, `AsArrayObject`,
+`AsCollection`, ...), arrays and collections are encoded the way the model would store them, in
+every method:
+
+```php
+Batch::update(new User, [['id' => 1, 'settings' => ['theme' => 'dark']]]);
+```
+
+Without such a cast, an array value is read as an increment / decrement.
+
 ## Update with two index columns
 
 Rows are matched on both columns:

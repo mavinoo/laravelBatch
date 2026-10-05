@@ -88,6 +88,7 @@ abstract class TestCase extends Orchestra
                 $table->boolean('active')->default(true);
                 $table->integer('balance')->default(100);
                 $table->text('meta')->nullable();
+                $table->json('settings')->nullable();
                 $table->timestamps();
                 $table->softDeletes();
             });

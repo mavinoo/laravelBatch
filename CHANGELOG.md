@@ -3,6 +3,18 @@
 All notable changes to `mavinoo/laravel-batch` are documented here.
 Older releases are listed on the [GitHub releases page](https://github.com/mavinoo/laravelBatch/releases).
 
+## 3.2.0 - Unreleased
+
+### Added
+- Update keys inside JSON columns with `column->key` (#64, #83, #111). Values keep their JSON type,
+  missing objects are created and `updated_at` only changes when the document changes.
+- Arrays and collections for columns the model casts to JSON are encoded the way the model stores
+  them, in every update, insert and upsert method.
+
+### Fixed
+- Updating a PostgreSQL `json` column failed with "operator does not exist: json <> unknown".
+- MySQL `json` columns touched `updated_at` even when their value didn't change.
+
 ## 3.1.0 - Unreleased
 
 ### Added

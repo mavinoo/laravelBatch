@@ -4,6 +4,7 @@ namespace Mavinoo\Batch;
 
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Eloquent\Casts;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\DatabaseManager;
@@ -11,12 +12,13 @@ use Illuminate\Database\Grammar;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Carbon;
 use InvalidArgumentException;
+use Mavinoo\Batch\Support\JsonPath;
 use Mavinoo\Batch\Support\RecordingConnection;
 
 /**
  * @phpstan-type Statement array{0: string, 1: list<mixed>}
  * @phpstan-type Entry array{conditions: array<string, mixed>, columns: array<string, mixed>}
- * @phpstan-type CompiledEntry array{conditions: array<string, mixed>, cases: array<string, Statement>, touch: Statement|null, cost: int}
+ * @phpstan-type CompiledEntry array{conditions: array<string, mixed>, cases: array<string, Statement>, touch: Statement|null, cost: int, json: array<string, true>}
  * @phpstan-type RecordedQuery array{sql: string, bindings: array<mixed>, connection: string}
  */
 class Batch implements BatchInterface
@@ -45,6 +47,26 @@ class Batch implements BatchInterface
     protected const MAX_ROWS_PER_UPDATE = 100;
 
     /**
+     * Built-in Eloquent casts that store a column as JSON.
+     */
+    private const JSON_CASTS = [
+        'array', 'json', 'json:unicode', 'object', 'collection',
+        'encrypted:array', 'encrypted:collection', 'encrypted:json', 'encrypted:object',
+    ];
+
+    /**
+     * Eloquent cast classes that store a column as JSON.
+     */
+    private const JSON_CAST_CLASSES = [
+        Casts\AsArrayObject::class,
+        Casts\AsCollection::class,
+        Casts\AsEncryptedArrayObject::class,
+        Casts\AsEncryptedCollection::class,
+        Casts\AsEnumArrayObject::class,
+        Casts\AsEnumCollection::class,
+    ];
+
+    /**
      * @var DatabaseManager
      */
     protected $db;
@@ -60,6 +82,13 @@ class Batch implements BatchInterface
      * @var array<string, RecordingConnection>
      */
     private $recorders = [];
+
+    /**
+     * Columns of the json type on PostgreSQL and MySQL, per connection and table.
+     *
+     * @var array<string, array<string, true>>
+     */
+    private $jsonTypeColumns = [];
 
     public function __construct(DatabaseManager $db)
     {
@@ -268,6 +297,8 @@ class Batch implements BatchInterface
             $rows[] = array_combine($columns, array_map([$this, 'enumValue'], array_values($row)));
         }
 
+        $rows = $this->castRowsToJson($table, $rows);
+
         if ($table->usesTimestamps()) {
             $now = Carbon::now()->format($table->getDateFormat());
 
@@ -382,6 +413,8 @@ class Batch implements BatchInterface
         foreach ($rows as $key => $row) {
             $rows[$key] = array_combine($columns, array_map([$this, 'enumValue'], $row));
         }
+
+        $rows = $this->castRowsToJson($table, $rows);
 
         $connection = $this->db->connection($this->getConnectionName($table));
 
@@ -642,13 +675,16 @@ class Batch implements BatchInterface
             $timestampValue = Carbon::now()->format($model->getDateFormat());
         }
 
+        $driver = $connection->getDriverName();
+        $jsonCasts = $this->jsonCastColumns($model);
+        $jsonTypeColumns = $entries ? $this->jsonTypeColumns($connection, $model) : [];
         $limit = $this->maxBindings($connection);
         $chunks = [];
         $chunk = [];
         $chunkCost = 0;
 
         foreach ($entries as $entry) {
-            $compiled = $this->compileEntry($grammar, $entry, $updatedAtColumn, $timestampValue);
+            $compiled = $this->compileEntry($grammar, $driver, $model, $jsonCasts, $jsonTypeColumns, $entry, $updatedAtColumn, $timestampValue);
             $cost = $compiled['cost'] + count($whereColumns);
 
             if ($chunk && ($chunkCost + $cost > $limit || count($chunk) >= static::MAX_ROWS_PER_UPDATE)) {
@@ -667,7 +703,7 @@ class Batch implements BatchInterface
 
         $statements = [];
         foreach ($chunks as $chunk) {
-            if ($statement = $this->compileUpdateStatement($grammar, $model, $chunk, $whereColumns, $updatedAtColumn, $connection->getDriverName())) {
+            if ($statement = $this->compileUpdateStatement($grammar, $model, $chunk, $whereColumns, $updatedAtColumn, $driver)) {
                 $statements[] = $statement;
             }
         }
@@ -688,10 +724,12 @@ class Batch implements BatchInterface
     /**
      * Compile the CASE branches contributed by a single row.
      *
+     * @param array<string, true> $jsonCasts columns the model casts to JSON
+     * @param array<string, true> $jsonTypeColumns columns of the json type, on PostgreSQL and MySQL
      * @param Entry $entry
      * @return CompiledEntry
      */
-    private function compileEntry(Grammar $grammar, array $entry, ?string $updatedAtColumn, ?string $timestampValue): array
+    private function compileEntry(Grammar $grammar, string $driver, Model $model, array $jsonCasts, array $jsonTypeColumns, array $entry, ?string $updatedAtColumn, ?string $timestampValue): array
     {
         [$whenSql, $whenBindings] = $this->compileConditions($grammar, $entry['conditions']);
 
@@ -699,9 +737,17 @@ class Batch implements BatchInterface
         $touch = null;
         $changes = [];
         $changeBindings = [];
+        $jsonPaths = []; // column => list of [keys, value]
+        $jsonColumns = [];
 
         foreach ($entry['columns'] as $column => $value) {
+            if ($path = JsonPath::parse($column)) {
+                $jsonPaths[$path[0]][] = [$path[1], $this->enumValue($value)];
+                continue;
+            }
+
             $wrapped = $grammar->wrap($column);
+            $value = $this->castToJson($model, $jsonCasts, $column, $value);
 
             if ($column === $updatedAtColumn) {
                 // An explicit non-null updated_at wins over the automatic timestamp.
@@ -724,6 +770,13 @@ class Batch implements BatchInterface
                 // Null-safe "value actually changes" check, used for the automatic timestamp.
                 if (is_null($value)) {
                     $changes[] = $wrapped . ' IS NOT NULL';
+                } elseif (isset($jsonTypeColumns[$column])) {
+                    // Compare JSON columns as JSON: PostgreSQL's json type has no "<>" operator,
+                    // and MySQL treats a JSON document and a string as different values.
+                    $changes[] = $driver === 'pgsql'
+                        ? 'CAST(' . $wrapped . ' AS jsonb) IS DISTINCT FROM CAST(' . $valueSql . ' AS jsonb)'
+                        : 'NOT (' . $wrapped . ' <=> JSON_EXTRACT(' . $valueSql . ', \'$\'))';
+                    $changeBindings = array_merge($changeBindings, $valueBindings);
                 } else {
                     $changes[] = '(' . $wrapped . ' <> ' . $valueSql . ' OR ' . $wrapped . ' IS NULL)';
                     $changeBindings = array_merge($changeBindings, $valueBindings);
@@ -731,6 +784,20 @@ class Batch implements BatchInterface
             }
 
             $cases[$column] = ['WHEN ' . $whenSql . ' THEN ' . $valueSql, array_merge($whenBindings, $valueBindings)];
+        }
+
+        foreach ($jsonPaths as $column => $paths) {
+            if (array_key_exists($column, $entry['columns'])) {
+                throw new InvalidArgumentException("A row can't set the \"{$column}\" column and a JSON path inside it at the same time.");
+            }
+
+            [$valueSql, $valueBindings] = JsonPath::compileSet($grammar, $driver, $column, $paths);
+            [$changeSql, $changeSqlBindings] = JsonPath::compileChanged($grammar, $driver, $column, [$valueSql, $valueBindings]);
+
+            $changes[] = $changeSql;
+            $changeBindings = array_merge($changeBindings, $changeSqlBindings);
+            $cases[$column] = ['WHEN ' . $whenSql . ' THEN ' . $valueSql, array_merge($whenBindings, $valueBindings)];
+            $jsonColumns[$column] = true;
         }
 
         if (is_null($touch) && $updatedAtColumn && count($changes)) {
@@ -750,6 +817,7 @@ class Batch implements BatchInterface
             'cases' => $cases,
             'touch' => $touch,
             'cost' => $cost,
+            'json' => $jsonColumns,
         ];
     }
 
@@ -765,8 +833,11 @@ class Batch implements BatchInterface
         $whens = [];
         $touches = [];
         $readers = []; // condition column => [updated column whose CASE reads it => true]
+        $jsonColumns = [];
 
         foreach ($chunk as $compiled) {
+            $jsonColumns += $compiled['json'];
+
             foreach ($compiled['cases'] as $column => $case) {
                 $whens[$column][] = $case;
 
@@ -798,7 +869,9 @@ class Batch implements BatchInterface
 
         foreach ($whens as $column => $cases) {
             $wrapped = $grammar->wrap($column);
-            $sets[] = $wrapped . ' = (CASE ' . implode(' ', array_column($cases, 0)) . ' ELSE ' . $wrapped . ' END)';
+            // PostgreSQL needs every CASE branch to have the type of the jsonb_set() branches.
+            $else = $driver === 'pgsql' && isset($jsonColumns[$column]) ? 'CAST(' . $wrapped . ' AS jsonb)' : $wrapped;
+            $sets[] = $wrapped . ' = (CASE ' . implode(' ', array_column($cases, 0)) . ' ELSE ' . $else . ' END)';
 
             foreach ($cases as [, $caseBindings]) {
                 array_push($bindings, ...$caseBindings);
@@ -966,6 +1039,121 @@ class Batch implements BatchInterface
         }
 
         return ['?', [$this->enumValue($value)]];
+    }
+
+    /**
+     * The model's columns of the json type on PostgreSQL and MySQL, looked up once per table.
+     *
+     * Other databases store JSON as text, which compares fine. pretend() doesn't connect to
+     * the database, so it treats no column as json.
+     *
+     * @return array<string, true>
+     */
+    private function jsonTypeColumns(Connection $connection, Model $model): array
+    {
+        $driver = $connection->getDriverName();
+
+        if (!is_null($this->pretended) || !in_array($driver, ['pgsql', 'mysql'], true)) {
+            return [];
+        }
+
+        $table = $connection->getTablePrefix() . $model->getTable();
+        $key = $connection->getName() . '|' . $table;
+
+        if (!isset($this->jsonTypeColumns[$key])) {
+            if ($driver === 'pgsql') {
+                $columns = $connection->select(
+                    "SELECT attname AS name FROM pg_attribute WHERE attrelid = to_regclass(?) AND atttypid = 'json'::regtype AND attnum > 0 AND NOT attisdropped",
+                    [$connection->getQueryGrammar()->wrapTable($model->getTable())],
+                    false
+                );
+            } else {
+                // A "database.table" name has the prefix on the table part only.
+                $parts = explode('.', $model->getTable(), 2);
+                $columns = $connection->select(
+                    "SELECT column_name AS name FROM information_schema.columns WHERE table_schema = COALESCE(?, DATABASE()) AND table_name = ? AND data_type = 'json'",
+                    count($parts) === 2
+                        ? [$parts[0], $connection->getTablePrefix() . $parts[1]]
+                        : [null, $connection->getTablePrefix() . $parts[0]],
+                    false
+                );
+            }
+
+            $this->jsonTypeColumns[$key] = [];
+            foreach ($columns as $column) {
+                $this->jsonTypeColumns[$key][(string) $column->name] = true;
+            }
+        }
+
+        return $this->jsonTypeColumns[$key];
+    }
+
+    /**
+     * The columns the model casts to JSON (array, json, collection, AsArrayObject, ...).
+     *
+     * @return array<string, true>
+     */
+    private function jsonCastColumns(Model $model): array
+    {
+        $columns = [];
+        foreach ($model->getCasts() as $column => $cast) {
+            $type = strtolower(trim((string) $cast));
+
+            if (in_array($type, self::JSON_CASTS, true)) {
+                $columns[$column] = true;
+                continue;
+            }
+
+            foreach (self::JSON_CAST_CLASSES as $class) {
+                if ((string) $cast === $class || str_starts_with((string) $cast, $class . ':')) {
+                    $columns[$column] = true;
+                }
+            }
+        }
+
+        return $columns;
+    }
+
+    /**
+     * Encode the values of JSON-cast columns in rows of column => value pairs.
+     *
+     * @param list<array<string, mixed>> $rows
+     * @return list<array<string, mixed>>
+     */
+    private function castRowsToJson(Model $model, array $rows): array
+    {
+        $jsonCasts = $this->jsonCastColumns($model);
+
+        if ($jsonCasts) {
+            foreach ($rows as $i => $row) {
+                foreach (array_intersect_key($row, $jsonCasts) as $column => $value) {
+                    $rows[$i][$column] = $this->castToJson($model, $jsonCasts, $column, $value);
+                }
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Encode an array or object for a JSON-cast column the way the model itself would store it.
+     *
+     * @param array<string, true> $jsonCasts
+     */
+    private function castToJson(Model $model, array $jsonCasts, string $column, mixed $value): mixed
+    {
+        if (!isset($jsonCasts[$column])) {
+            return $value;
+        }
+
+        if (!is_array($value) && (!is_object($value) || $value instanceof Expression || $value instanceof \UnitEnum || $value instanceof \DateTimeInterface)) {
+            return $value;
+        }
+
+        $scratch = $model->newInstance();
+        $scratch->setAttribute($column, $value);
+
+        return $scratch->getAttributes()[$column];
     }
 
     /**
