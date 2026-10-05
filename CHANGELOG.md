@@ -3,7 +3,32 @@
 All notable changes to `mavinoo/laravel-batch` are documented here.
 Older releases are listed on the [GitHub releases page](https://github.com/mavinoo/laravelBatch/releases).
 
-## 3.1.0 - Unreleased
+## 3.2.0 - Unreleased
+
+### Added
+- Update keys inside JSON columns with `column->key` (#64, #83, #111). Values keep their JSON type,
+  missing objects are created and `updated_at` only changes when the document changes.
+- Arrays and collections for columns the model casts to JSON are encoded the way the model stores
+  them, in every update, insert and upsert method.
+- `insertGetIds()` and `HasBatch::batchInsertGetIds()`: insert rows and get their auto-increment ids,
+  in row order (#48).
+- `import()` and `HasBatch::batchImport()`: import rows from CSV, TSV and JSON Lines files (also
+  gzipped), open streams or any iterable, a chunk at a time with constant memory. Supports insert,
+  insert-ignore and upsert, column mapping, transforms, progress and error callbacks.
+- `splitFile()`: split a large file into parts by number of records and / or size, without cutting
+  a record or a multi-line CSV field in half.
+- `deleteInChunks()`, `updateInChunks()` and `archive()`: delete, update or move the rows a query
+  matches a chunk at a time, walking the table in primary key order. Also available as
+  `deleteInChunks()`, `updateInChunks()` and `archiveTo()` on Eloquent and query builders.
+- `sync()`: insert, update and delete the rows a query matches so they match a list, in one
+  transaction. The database compares the keys, so its collation decides which are equal. Also
+  available as `syncRows()` on Eloquent builders.
+
+### Fixed
+- Updating a PostgreSQL `json` column failed with "operator does not exist: json <> unknown".
+- MySQL `json` columns touched `updated_at` even when their value didn't change.
+
+## 3.1.0 - 2026-10-04
 
 ### Added
 - `updateByKeys()`: update rows matched on any number of key columns.

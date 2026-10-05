@@ -208,6 +208,32 @@ trait HasBatch
     }
 
     /**
+     * Insert rows given as column => value pairs and return their auto-increment ids, in order.
+     *
+     * @param  array<array-key, mixed>  $rows
+     * @param  int  $batchSize
+     *
+     * @return list<int>
+     */
+    public static function batchInsertGetIds(array $rows, int $batchSize = 500): array
+    {
+        return app(Batch::class)->insertGetIds(self::batchModel(), $rows, $batchSize);
+    }
+
+    /**
+     * Import rows from a CSV / TSV / JSON Lines file, an open stream or an iterable, a chunk at a time.
+     *
+     * @param  mixed  $source
+     * @param  array<string, mixed>  $options
+     *
+     * @return array{totalRows: int, skipped: int}
+     */
+    public static function batchImport(mixed $source, array $options = []): array
+    {
+        return app(Batch::class)->import(self::batchModel(), $source, $options);
+    }
+
+    /**
      * Insert rows, or update them when a row with the same $uniqueBy values already exists.
      *
      * @param  array<array-key, mixed>  $values
