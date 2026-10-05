@@ -3,7 +3,7 @@
 All notable changes to `mavinoo/laravel-batch` are documented here.
 Older releases are listed on the [GitHub releases page](https://github.com/mavinoo/laravelBatch/releases).
 
-## 3.3.0 - Unreleased
+## 3.3.0 - 2026-10-05
 
 ### Added
 - Counter upserts: `upsert($table, $rows, ['sku'], ['qty' => ['+']])` adds to the stored value.
