@@ -285,6 +285,35 @@ Batch::deleteByKeys(new Score, [
 Models that use `SoftDeletes` are soft deleted (only `deleted_at`, and `updated_at`, are set).
 Pass `true` as the fourth argument to delete them for real.
 
+# Sync a table with a list
+
+`sync()` makes the rows a query matches look like a list, in one transaction: rows that are new
+are inserted, rows that exist are updated, and rows the list doesn't have are deleted.
+
+```php
+$result = Batch::sync(Product::where('supplier_id', 5), $feedRows, ['sku']);
+// ['inserted' => 120, 'updated' => 4800, 'deleted' => 35]
+
+// The same, on the query:
+Product::where('supplier_id', 5)->syncRows($feedRows, ['sku']);
+```
+
+- Only rows in the scope query can be deleted, so the scope is always explicit: pass
+  `Product::query()` to sync a whole table. The rows of the list should belong to the scope (here,
+  have `supplier_id` 5).
+- The third argument lists the columns that identify a row; they need a primary or unique index.
+  The fourth lists the columns to update on existing rows (default: every given column).
+- An empty list would delete every row in the scope, so it throws unless `allowEmpty: true`.
+- The keys are compared by the database itself, through a temporary table, so its collation
+  decides which keys are equal. On MySQL, `"ABC"` and `"abc"` are the same key by default, and
+  `sync()` won't delete a row it just updated.
+- When a key appears twice in the list, the later row wins.
+- The list can be any iterable, such as a generator or a `LazyCollection`, and is written a chunk at
+  a time: syncing 100,000 rows into a 100,000-row table took 1.4 to 4.8 seconds and 15 MB of memory.
+- Models that use `SoftDeletes` are soft deleted unless `force: true`, and soft-deleted rows that are
+  in the list are restored. Model events are not fired.
+- The database user needs permission to create temporary tables.
+
 # Large deletes, updates and archives
 
 Deleting or updating millions of rows in one statement locks the table for a long time and fills
@@ -392,6 +421,15 @@ User::batchUpsert($rows, ['email'], ['name']);
 User::batchDeleteByKeys($rows, ['org_id', 'year']);
 ```
 
+The query-based methods are available on every Eloquent query, with or without the trait:
+
+```php
+User::where('active', false)->deleteInChunks(1000);
+User::where('active', false)->updateInChunks(['status' => 'archived']);
+User::where('created_at', '<', '2020-01-01')->archiveTo('users_archive');
+User::where('org_id', 5)->syncRows($rows, ['email']);
+```
+
 `(new User)->updateMultipleCondition()` still works, but is deprecated in favour of the static
 `User::batchUpdateMultipleCondition()` and will be removed in 4.0.
 
@@ -406,8 +444,9 @@ batch()->insert(new User, $columns, $values, 500);
 
 - Batches that would go over the database's limit on bound parameters are split into several
   queries automatically, and each `UPDATE` holds at most 100 rows, which benchmarks showed to be the
-  fastest size on every supported database. Several queries always run in one transaction on the model's connection,
-  so either every row is written or none is.
+  fastest size on every supported database. Several queries run in one transaction on the model's
+  connection, so either every row is written or none is. The exceptions are the chunked methods,
+  which commit every chunk on purpose, and `import()` with `'atomic' => false`.
 - Invalid input (a row that isn't an array, a row without its index value, an array where a single
   value to match on is expected, a row with the wrong number of values, an invalid increment array)
   throws an `InvalidArgumentException` before anything is written.

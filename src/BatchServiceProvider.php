@@ -27,8 +27,8 @@ class BatchServiceProvider extends ServiceProvider
     }
 
     /**
-     * Add the chunked methods to Eloquent and query builders:
-     * Log::where(...)->deleteInChunks(), ->updateInChunks([...]) and ->archiveTo('table').
+     * Add the chunked methods to Eloquent and query builders: Log::where(...)->deleteInChunks(),
+     * ->updateInChunks([...]) and ->archiveTo('table'), and Product::where(...)->syncRows($rows, ['sku']).
      */
     public function boot(): void
     {
@@ -48,5 +48,10 @@ class BatchServiceProvider extends ServiceProvider
                 return app(Batch::class)->archive($this, ...$arguments);
             });
         }
+
+        EloquentBuilder::macro('syncRows', function (...$arguments) {
+            /** @var EloquentBuilder<\Illuminate\Database\Eloquent\Model> $this */
+            return app(Batch::class)->sync($this, ...$arguments);
+        });
     }
 }

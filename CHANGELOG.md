@@ -20,12 +20,15 @@ Older releases are listed on the [GitHub releases page](https://github.com/mavin
 - `deleteInChunks()`, `updateInChunks()` and `archive()`: delete, update or move the rows a query
   matches a chunk at a time, walking the table in primary key order. Also available as
   `deleteInChunks()`, `updateInChunks()` and `archiveTo()` on Eloquent and query builders.
+- `sync()`: insert, update and delete the rows a query matches so they match a list, in one
+  transaction. The database compares the keys, so its collation decides which are equal. Also
+  available as `syncRows()` on Eloquent builders.
 
 ### Fixed
 - Updating a PostgreSQL `json` column failed with "operator does not exist: json <> unknown".
 - MySQL `json` columns touched `updated_at` even when their value didn't change.
 
-## 3.1.0 - Unreleased
+## 3.1.0 - 2026-10-04
 
 ### Added
 - `updateByKeys()`: update rows matched on any number of key columns.

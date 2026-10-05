@@ -51,6 +51,11 @@ class Batch implements BatchInterface
     protected const MAX_ROWS_PER_UPDATE = 100;
 
     /**
+     * Column of sync()'s temporary key table that numbers the chunks.
+     */
+    private const SYNC_CHUNK_COLUMN = 'batch_sync_chunk';
+
+    /**
      * Built-in Eloquent casts that store a column as JSON.
      */
     private const JSON_CASTS = [
@@ -788,6 +793,122 @@ class Batch implements BatchInterface
             }
 
             return $copied;
+        });
+    }
+
+    /**
+     * Make the rows a query matches look like a list: insert new rows, update existing ones and
+     * delete the rows the list doesn't have, in one transaction.
+     *
+     * The scope query decides which rows can be deleted, so it's an explicit query: use
+     * Product::query() to sync a whole table. The list is compared with the database by the
+     * database itself, through a temporary table, so its collation decides which keys are the
+     * same ("ABC" and "abc" are on MySQL by default). When a key appears twice, the later row wins.
+     *
+     * Models that use SoftDeletes are soft deleted unless $force is true, and soft-deleted rows
+     * that are in the list are restored. Model events are not fired.
+     *
+     * Example:
+     * ```
+     * Batch::sync(Product::where('supplier_id', 5), $feedRows, ['sku']);
+     * // ['inserted' => 120, 'updated' => 4800, 'deleted' => 35]
+     * ```
+     *
+     * @param EloquentBuilder<Model> $scope the rows the list replaces
+     * @param iterable<mixed> $rows rows of column => value pairs, all with the same columns
+     * @param array<int, string>|string $uniqueBy the column(s) that identify a row; they need a primary or unique index
+     * @param array<array-key, mixed>|null $update columns to update on existing rows; null updates every given column
+     * @param bool $force delete soft-deleting models for real
+     * @param bool $allowEmpty allow an empty list, which deletes every row in the scope
+     * @param int $chunk rows per write
+     * @return array{inserted: int, updated: int, deleted: int}
+     *
+     * @throws InvalidArgumentException for an empty list without $allowEmpty, or a row without its key values
+     */
+    public function sync(EloquentBuilder $scope, iterable $rows, array|string $uniqueBy, ?array $update = null, bool $force = false, bool $allowEmpty = false, int $chunk = 1000): array
+    {
+        $keys = $this->keyColumns((array) $uniqueBy, 'sync');
+        $model = $scope->getModel();
+        $connection = $this->db->connection($this->getConnectionName($model));
+        $driver = $connection->getDriverName();
+
+        if (!in_array($driver, ['mysql', 'mariadb', 'pgsql', 'sqlite'], true)) {
+            throw new InvalidArgumentException("sync() is not supported on the \"{$driver}\" driver.");
+        }
+
+        if ($chunk < 1) {
+            throw new InvalidArgumentException('The chunk size must be at least 1.');
+        }
+
+        $deletedAt = in_array(SoftDeletes::class, class_uses_recursive($model), true) && method_exists($model, 'getDeletedAtColumn')
+            ? (string) $model->getDeletedAtColumn()
+            : null;
+
+        if ($deletedAt && !is_null($update)) {
+            $update[] = $deletedAt; // restore soft-deleted rows that are in the list
+        }
+
+        // Keys of a chunk are matched in one query, so keep them under the binding limit.
+        $chunk = max(1, min($chunk, intdiv($this->maxBindings($connection), count($keys))));
+
+        return $this->transaction($connection, function () use ($scope, $rows, $keys, $update, $force, $allowEmpty, $chunk, $model, $connection, $deletedAt) {
+            $runner = $this->runner($connection);
+            $table = $model->getTable();
+            $temporary = 'batch_sync_' . bin2hex(random_bytes(6));
+            $counts = ['inserted' => 0, 'updated' => 0, 'deleted' => 0];
+
+            $this->createKeyTable($runner, $temporary, $table, $keys);
+
+            try {
+                $pending = [];
+                $number = 0;
+
+                foreach ($rows as $row) {
+                    if (!is_array($row)) {
+                        throw new InvalidArgumentException("Row {$number} must be an array of column => value pairs.");
+                    }
+
+                    $match = [];
+                    foreach ($keys as $key) {
+                        $value = $this->enumValue($row[$key] ?? null);
+
+                        if (!is_scalar($value)) {
+                            throw new InvalidArgumentException("Row {$number} needs a single value for the \"{$key}\" key column.");
+                        }
+                        $match[] = (string) $value;
+                    }
+
+                    if ($deletedAt) {
+                        $row[$deletedAt] = null;
+                    }
+
+                    // The later of two rows with the same key wins.
+                    $id = json_encode($match, JSON_THROW_ON_ERROR);
+                    unset($pending[$id]);
+                    $pending[$id] = $row;
+                    $number++;
+
+                    if (count($pending) >= $chunk) {
+                        $this->syncChunk($connection, $runner, $temporary, $model, $keys, $update, array_values($pending), $counts);
+                        $pending = [];
+                    }
+                }
+
+                if (!$number && !$allowEmpty) {
+                    throw new InvalidArgumentException('sync() got no rows, which would delete every row in the scope. Pass $allowEmpty = true to do that.');
+                }
+
+                if ($pending) {
+                    $this->syncChunk($connection, $runner, $temporary, $model, $keys, $update, array_values($pending), $counts);
+                }
+
+                $counts['deleted'] = $this->deleteMissing($scope, $runner, $temporary, $table, $keys, $force, $deletedAt);
+            } finally {
+                $drop = in_array($connection->getDriverName(), ['mysql', 'mariadb'], true) ? 'DROP TEMPORARY TABLE IF EXISTS ' : 'DROP TABLE IF EXISTS ';
+                $runner->statement($drop . $connection->getQueryGrammar()->wrapTable($temporary));
+            }
+
+            return $counts;
         });
     }
 
@@ -1543,6 +1664,105 @@ class Batch implements BatchInterface
         }
 
         return $columns;
+    }
+
+    /**
+     * Write one chunk of sync() rows: record their keys, count the ones the table already has,
+     * and upsert them.
+     *
+     * @param list<string> $keys
+     * @param array<array-key, mixed>|null $update
+     * @param list<array<array-key, mixed>> $rows
+     * @param array{inserted: int, updated: int, deleted: int} $counts
+     */
+    private function syncChunk(Connection $connection, Connection $runner, string $temporary, Model $model, array $keys, ?array $update, array $rows, array &$counts): void
+    {
+        $number = $counts['inserted'] + $counts['updated']; // unique per chunk
+        $matches = array_map(
+            fn (array $row) => array_map([$this, 'enumValue'], array_intersect_key($row, array_flip($keys))) + [self::SYNC_CHUNK_COLUMN => $number],
+            $rows
+        );
+
+        foreach (array_chunk($matches, $this->rowsPerInsert($connection, 1000, count($keys) + 1)) as $part) {
+            $runner->table($temporary)->insert($part);
+        }
+
+        // Rows the table already has, soft-deleted ones included, are updated by the upsert.
+        $existing = 0;
+        if (is_null($this->pretended)) {
+            $table = $model->getTable();
+            $existing = $connection->table($temporary)
+                ->where(self::SYNC_CHUNK_COLUMN, $number)
+                ->whereExists(function (QueryBuilder $query) use ($table, $temporary, $keys) {
+                    $query->selectRaw('1')->from($table);
+                    foreach ($keys as $key) {
+                        $query->whereColumn("{$table}.{$key}", '=', "{$temporary}.{$key}");
+                    }
+                })
+                ->count();
+        }
+
+        $this->upsert($model, $rows, $keys, $update);
+        $counts['updated'] += $existing;
+        $counts['inserted'] += count($rows) - $existing;
+    }
+
+    /**
+     * Create a temporary table for sync() with the key columns of $table, with their types and
+     * collations, so the database compares the keys the way its unique index does.
+     *
+     * @param list<string> $keys
+     */
+    private function createKeyTable(Connection $runner, string $temporary, string $table, array $keys): void
+    {
+        $grammar = $runner->getQueryGrammar();
+        $wrapped = $grammar->wrapTable($temporary);
+        $columns = implode(', ', array_map(fn (string $key) => $grammar->wrap($key), $keys));
+        $source = $grammar->wrapTable($table);
+
+        $chunk = $grammar->wrap(self::SYNC_CHUNK_COLUMN);
+
+        if (in_array($runner->getDriverName(), ['mysql', 'mariadb'], true)) {
+            $runner->statement("CREATE TEMPORARY TABLE {$wrapped} (INDEX ({$columns}), INDEX ({$chunk})) SELECT {$columns}, 0 AS {$chunk} FROM {$source} LIMIT 0");
+
+            return;
+        }
+
+        $runner->statement("CREATE TEMPORARY TABLE {$wrapped} AS SELECT {$columns}, 0 AS {$chunk} FROM {$source} LIMIT 0");
+        $runner->statement('CREATE INDEX ' . $grammar->wrap($runner->getTablePrefix() . $temporary . '_keys') . " ON {$wrapped} ({$columns})");
+        $runner->statement('CREATE INDEX ' . $grammar->wrap($runner->getTablePrefix() . $temporary . '_chunk') . " ON {$wrapped} ({$chunk})");
+    }
+
+    /**
+     * Delete the rows in the scope whose keys aren't in the temporary key table.
+     *
+     * @param EloquentBuilder<Model> $scope
+     * @param list<string> $keys
+     */
+    private function deleteMissing(EloquentBuilder $scope, Connection $runner, string $temporary, string $table, array $keys, bool $force, ?string $deletedAt): int
+    {
+        $query = (clone $scope)->whereNotExists(function (QueryBuilder $exists) use ($temporary, $table, $keys) {
+            $exists->selectRaw('1')->from($temporary);
+            foreach ($keys as $key) {
+                $exists->whereColumn("{$temporary}.{$key}", '=', "{$table}.{$key}");
+            }
+        })->toBase();
+
+        // Run through the runner, so pretend() records the statement instead of running it.
+        $query->connection = $runner;
+
+        if ($force || is_null($deletedAt)) {
+            return $query->delete();
+        }
+
+        $model = $scope->getModel();
+        $now = $model->freshTimestampString();
+        $values = [$deletedAt => $now];
+        if ($model->usesTimestamps() && !is_null($model->getUpdatedAtColumn())) {
+            $values[$model->getUpdatedAtColumn()] = $now;
+        }
+
+        return $query->update($values);
     }
 
     /**
