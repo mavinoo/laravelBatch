@@ -207,6 +207,70 @@ $ids = Batch::insertGetIds(new User, [
 - It's a separate method, so `insert()` and `insertRows()` don't pay for fetching ids.
 - Inside `pretend()` nothing runs, so it returns `[]`.
 
+# Import from a file or any iterable
+
+`import()` reads rows one at a time and writes them a chunk at a time, so files of any size are
+imported with constant memory. Importing a 500,000-row CSV file used 7 MB of memory instead of the
+765 MB that reading it into an array for `insertRows()` took, and was 30 to 45% faster.
+
+```php
+$result = Batch::import(new User, storage_path('users.csv'), [
+    'mode'      => 'upsert',                  // 'insert' (default), 'insertIgnore' or 'upsert'
+    'uniqueBy'  => ['email'],
+    'update'    => ['name'],
+    'map'       => ['E-mail' => 'email', 'Full name' => 'name'], // only mapped columns are imported
+    'transform' => fn (array $row) => $row['email'] ? $row : null, // null skips the row
+]);
+
+// ['totalRows' => 25000, 'skipped' => 12]
+```
+
+The source can be:
+
+- a CSV, TSV or JSON Lines file (`.csv`, `.tsv`, `.jsonl` / `.ndjson`, also gzipped as `.csv.gz`);
+- an open stream, such as `Storage::disk('s3')->readStream('users.csv')`, with the `format` option;
+- any iterable of rows: an array, a generator, a `LazyCollection`, or `Model::cursor()` to copy
+  rows between tables or connections.
+
+| Option | Default | |
+|---|---|---|
+| `mode` | `'insert'` | `'insert'`, `'insertIgnore'` or `'upsert'` |
+| `uniqueBy`, `update` | | the `upsert()` arguments, for `'upsert'` |
+| `chunk` | `1000` | rows per write |
+| `atomic` | `true` | one transaction for the whole import; `false` commits each chunk |
+| `format` | from the extension | `'csv'`, `'tsv'` or `'jsonl'` |
+| `header` | `true` | the first CSV row names the columns |
+| `columns` | | column names for a CSV file without a header |
+| `delimiter`, `enclosure` | `,` (tab for TSV), `"` | |
+| `map` | | `[source column => table column]` |
+| `nullValues` | `[]` | strings stored as `null`, e.g. `['', 'NULL']` |
+| `transform` | | `fn (array $row, int $number): ?array` |
+| `onChunk` | | `fn (int $written)`, after every chunk |
+| `onError` | | `fn (InvalidArgumentException $e, int $number)`: skip malformed rows instead of stopping |
+
+- CSV files are read the RFC 4180 way: quotes inside a field are doubled, and quoted fields can span
+  lines. A UTF-8 BOM is removed.
+- Every row needs the same columns. A row that can't be read (wrong number of fields, invalid
+  JSON, different columns) stops the import with its row number, unless `onError` is given.
+- Never pass a path that comes from user input.
+
+## Split a large file
+
+```php
+$parts = Batch::splitFile(storage_path('users.csv'), lines: 50000);
+// ['.../users-001.csv', '.../users-002.csv', ...]
+
+Batch::splitFile($path, bytes: 100 * 1024 * 1024);          // at most 100 MB per part
+Batch::splitFile($path, lines: 50000, bytes: 50_000_000);   // whichever comes first
+```
+
+- A record is never cut in half. In CSV files a quoted field that spans several lines stays one
+  record, and the header row is repeated in every part (`'header' => false` turns that off).
+- A record bigger than `bytes` gets a part of its own.
+- Records are copied byte for byte, so quoting and line endings don't change.
+- Parts go next to the file, or into the `directory` option. An existing part throws, unless
+  `'overwrite' => true`. A `.gz` file is read and split into plain parts.
+
 # Delete
 
 Delete rows matched on one or more key columns:
@@ -278,6 +342,7 @@ User::batchUpdateMultipleCondition($items, 'id');
 User::batchInsert($columns, $values, 500);
 User::batchInsertRows($rows, 500);
 User::batchInsertGetIds($rows, 500);
+User::batchImport(storage_path('users.csv'), ['mode' => 'upsert', 'uniqueBy' => ['email']]);
 User::batchUpsert($rows, ['email'], ['name']);
 User::batchDeleteByKeys($rows, ['org_id', 'year']);
 ```

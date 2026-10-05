@@ -12,6 +12,8 @@ use Illuminate\Support\Facades\Facade;
  * @method static int updateByKeys(\Illuminate\Database\Eloquent\Model $table, array<array-key, mixed> $values, array<array-key, mixed> $keys)
  * @method static array{totalRows: int, totalBatch: int, totalQuery: int} insertRows(\Illuminate\Database\Eloquent\Model $table, array<array-key, mixed> $rows, int $batchSize = 500, bool $insertIgnore = false)
  * @method static list<int> insertGetIds(\Illuminate\Database\Eloquent\Model $table, array<array-key, mixed> $rows, int $batchSize = 500)
+ * @method static array{totalRows: int, skipped: int} import(\Illuminate\Database\Eloquent\Model $table, mixed $source, array<string, mixed> $options = [])
+ * @method static list<string> splitFile(string $path, ?int $lines = null, ?int $bytes = null, array<string, mixed> $options = [])
  * @method static int deleteByKeys(\Illuminate\Database\Eloquent\Model $table, array<array-key, mixed> $values, array<array-key, mixed> $keys, bool $force = false)
  * @method static int upsert(\Illuminate\Database\Eloquent\Model $table, array<array-key, mixed> $values, array<int, string>|string $uniqueBy, ?array<array-key, mixed> $update = null)
  * @method static list<array{sql: string, bindings: array<mixed>, connection: string}> pretend(callable $callback)

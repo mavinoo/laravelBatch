@@ -12,6 +12,11 @@ Older releases are listed on the [GitHub releases page](https://github.com/mavin
   them, in every update, insert and upsert method.
 - `insertGetIds()` and `HasBatch::batchInsertGetIds()`: insert rows and get their auto-increment ids,
   in row order (#48).
+- `import()` and `HasBatch::batchImport()`: import rows from CSV, TSV and JSON Lines files (also
+  gzipped), open streams or any iterable, a chunk at a time with constant memory. Supports insert,
+  insert-ignore and upsert, column mapping, transforms, progress and error callbacks.
+- `splitFile()`: split a large file into parts by number of records and / or size, without cutting
+  a record or a multi-line CSV field in half.
 
 ### Fixed
 - Updating a PostgreSQL `json` column failed with "operator does not exist: json <> unknown".

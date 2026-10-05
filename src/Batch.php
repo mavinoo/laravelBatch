@@ -13,8 +13,10 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use InvalidArgumentException;
+use Mavinoo\Batch\Support\FileSplitter;
 use Mavinoo\Batch\Support\JsonPath;
 use Mavinoo\Batch\Support\RecordingConnection;
+use Mavinoo\Batch\Support\RowReader;
 
 /**
  * @phpstan-type Statement array{0: string, 1: list<mixed>}
@@ -430,6 +432,207 @@ class Batch implements BatchInterface
 
             return $ids;
         });
+    }
+
+    /**
+     * Import rows from a CSV / TSV / JSON Lines file, an open stream or any iterable, a chunk at a
+     * time, so sources of any size are imported with constant memory.
+     *
+     * Example:
+     * ```
+     * Batch::import(new User, storage_path('users.csv'), [
+     *     'mode' => 'upsert',
+     *     'uniqueBy' => ['email'],
+     *     'map' => ['E-mail' => 'email', 'Full name' => 'name'],
+     *     'transform' => fn (array $row) => $row['email'] ? $row : null, // null skips the row
+     * ]);
+     * // ['totalRows' => 25000, 'skipped' => 12]
+     * ```
+     *
+     * Options:
+     * - mode: "insert" (default), "insertIgnore" or "upsert"
+     * - uniqueBy, update: the upsert() arguments, for mode "upsert"
+     * - chunk: rows per write, default 1000
+     * - atomic: run the whole import in one transaction (default true); false commits every chunk
+     * - format: "csv", "tsv" or "jsonl"; by default taken from the file extension (".gz" is read too)
+     * - header: whether the first CSV row names the columns (default true, false when "columns" is given)
+     * - columns: column names for a CSV file, in field order
+     * - delimiter, enclosure: CSV characters, default "," (tab for tsv) and '"'
+     * - map: [source column => table column]; only the mapped columns are imported
+     * - nullValues: strings stored as null, e.g. ['', 'NULL']
+     * - transform: fn (array $row, int $number): ?array, applied to every row; null skips it
+     * - onChunk: fn (int $written): void, called after every chunk
+     * - onError: fn (InvalidArgumentException $e, int $number): void; malformed rows are passed to
+     *   it and skipped instead of stopping the import
+     *
+     * @param Model $table
+     * @param mixed $source a file path, an open stream resource, or an iterable of rows (arrays, models or objects)
+     * @param array<string, mixed> $options
+     * @return array{totalRows: int, skipped: int} rows written, and rows skipped by transform or onError
+     *
+     * @throws InvalidArgumentException for an invalid option, an unreadable source, or a malformed row without onError
+     */
+    public function import(Model $table, mixed $source, array $options = []): array
+    {
+        $this->assertKnownOptions('import', $options, [
+            'mode', 'uniqueBy', 'update', 'chunk', 'atomic', 'format', 'header', 'columns', 'delimiter',
+            'enclosure', 'map', 'nullValues', 'transform', 'onChunk', 'onError',
+        ]);
+
+        $mode = $options['mode'] ?? 'insert';
+        if (!in_array($mode, ['insert', 'insertIgnore', 'upsert'], true)) {
+            throw new InvalidArgumentException('The import "mode" must be "insert", "insertIgnore" or "upsert".');
+        }
+
+        $uniqueBy = $options['uniqueBy'] ?? null;
+        if ($mode === 'upsert' && !is_string($uniqueBy) && !is_array($uniqueBy)) {
+            throw new InvalidArgumentException('An import in "upsert" mode needs the "uniqueBy" option.');
+        }
+
+        $update = $options['update'] ?? null;
+        if (!is_null($update) && !is_array($update)) {
+            throw new InvalidArgumentException('The import "update" option must be an array of columns.');
+        }
+
+        $chunkSize = $options['chunk'] ?? 1000;
+        if (!is_int($chunkSize) || $chunkSize < 1) {
+            throw new InvalidArgumentException('The import "chunk" option must be a positive integer.');
+        }
+
+        $map = null;
+        if (isset($options['map'])) {
+            if (!is_array($options['map']) || !$options['map']) {
+                throw new InvalidArgumentException('The import "map" option must be a non-empty array of source column => table column.');
+            }
+
+            $map = [];
+            foreach ($options['map'] as $from => $to) {
+                if (!is_string($to) || $to === '') {
+                    throw new InvalidArgumentException('The import "map" option must map every source column to a table column name.');
+                }
+                $map[$from] = $to;
+            }
+        }
+
+        $nullValues = $options['nullValues'] ?? [];
+        if (!is_array($nullValues)) {
+            throw new InvalidArgumentException('The import "nullValues" option must be an array of strings.');
+        }
+
+        $transform = $this->callableOption($options, 'transform');
+        $onChunk = $this->callableOption($options, 'onChunk');
+        $onError = $this->callableOption($options, 'onError');
+
+        $reader = RowReader::read($source, [
+            'format' => $this->stringOption($options, 'format'),
+            'header' => isset($options['header']) ? (bool) $options['header'] : null,
+            'columns' => isset($options['columns']) ? $this->columnList($options['columns']) : null,
+            'delimiter' => $this->stringOption($options, 'delimiter'),
+            'enclosure' => $this->stringOption($options, 'enclosure'),
+        ]);
+
+        $write = function (array $rows) use ($table, $mode, $uniqueBy, $update, $chunkSize): void {
+            if ($mode === 'upsert') {
+                /** @var array<int, string>|string $uniqueBy */
+                $this->upsert($table, $rows, $uniqueBy, $update);
+            } else {
+                $this->insertRows($table, $rows, $chunkSize, $mode === 'insertIgnore');
+            }
+        };
+
+        $run = function () use ($reader, $write, $chunkSize, $map, $nullValues, $transform, $onChunk, $onError): array {
+            $written = 0;
+            $skipped = 0;
+            $chunk = [];
+            $columns = null;
+
+            foreach ($reader as [$number, $row, $error]) {
+                if (!is_null($row)) {
+                    [$row, $error] = $this->importRow($row, $map, $nullValues, $transform, $number, $columns);
+
+                    if (is_null($row) && is_null($error)) {
+                        $skipped++; // skipped by transform
+                        continue;
+                    }
+                }
+
+                if (is_null($row)) {
+                    $exception = new InvalidArgumentException("Row {$number} can't be imported: {$error}.");
+
+                    if (is_null($onError)) {
+                        throw $exception;
+                    }
+
+                    $onError($exception, $number);
+                    $skipped++;
+                    continue;
+                }
+
+                $columns ??= array_keys($row);
+                $chunk[] = $row;
+
+                if (count($chunk) >= $chunkSize) {
+                    $write($chunk);
+                    $written += count($chunk);
+                    $chunk = [];
+
+                    if ($onChunk) {
+                        $onChunk($written);
+                    }
+                }
+            }
+
+            if ($chunk) {
+                $write($chunk);
+                $written += count($chunk);
+
+                if ($onChunk) {
+                    $onChunk($written);
+                }
+            }
+
+            return ['totalRows' => $written, 'skipped' => $skipped];
+        };
+
+        $connection = $this->db->connection($this->getConnectionName($table));
+
+        return ($options['atomic'] ?? true) ? $this->transaction($connection, $run) : $run();
+    }
+
+    /**
+     * Split a large file into parts of at most $lines records and / or $bytes bytes, without
+     * cutting a record in half. CSV fields that span several lines stay one record, and the
+     * header row is repeated in every part.
+     *
+     * Example:
+     * ```
+     * Batch::splitFile(storage_path('users.csv'), lines: 50000);
+     * // ['.../users-001.csv', '.../users-002.csv', ...]
+     * ```
+     *
+     * Options:
+     * - header: repeat the first line in every part (default true for csv / tsv files)
+     * - format: "csv", "tsv", "jsonl" or "lines"; by default taken from the file extension
+     * - directory: where the parts go, default the file's own directory
+     * - overwrite: replace existing parts (default false: an existing part throws)
+     * - enclosure: the CSV quote character, default '"'
+     *
+     * @param array<string, mixed> $options
+     * @return list<string> paths of the parts, in order
+     *
+     * @throws InvalidArgumentException for invalid limits, an unreadable file or an existing part
+     */
+    public function splitFile(string $path, ?int $lines = null, ?int $bytes = null, array $options = []): array
+    {
+        $this->assertKnownOptions('splitFile', $options, ['header', 'format', 'directory', 'overwrite', 'enclosure']);
+
+        return FileSplitter::split($path, $lines, $bytes, [
+            'header' => isset($options['header']) ? (bool) $options['header'] : null,
+            'format' => $this->stringOption($options, 'format'),
+            'directory' => $this->stringOption($options, 'directory'),
+            'overwrite' => (bool) ($options['overwrite'] ?? false),
+            'enclosure' => $this->stringOption($options, 'enclosure'),
+        ]);
     }
 
     /**
@@ -1184,6 +1387,127 @@ class Batch implements BatchInterface
         }
 
         return $columns;
+    }
+
+    /**
+     * Map, clean and transform one imported row, and check it has the same columns as the first.
+     *
+     * @param array<array-key, mixed> $row
+     * @param array<array-key, string>|null $map
+     * @param array<array-key, mixed> $nullValues
+     * @param list<array-key>|null $columns the first row's columns
+     * @return array{0: array<string, mixed>|null, 1: string|null} the row, or null and an error (both null: skipped)
+     */
+    private function importRow(array $row, ?array $map, array $nullValues, ?callable $transform, int $number, ?array $columns): array
+    {
+        if (!is_null($map)) {
+            $mapped = [];
+            foreach ($map as $from => $to) {
+                if (!array_key_exists($from, $row)) {
+                    return [null, "it has no \"{$from}\" column"];
+                }
+                $mapped[$to] = $row[$from];
+            }
+            $row = $mapped;
+        }
+
+        if ($nullValues) {
+            foreach ($row as $column => $value) {
+                if (is_string($value) && in_array($value, $nullValues, true)) {
+                    $row[$column] = null;
+                }
+            }
+        }
+
+        if ($transform) {
+            $row = $transform($row, $number);
+
+            if (is_null($row)) {
+                return [null, null];
+            }
+
+            if (!is_array($row)) {
+                return [null, 'transform must return an array or null'];
+            }
+        }
+
+        $named = [];
+        foreach ($row as $column => $value) {
+            if (!is_string($column) || $column === '') {
+                return [null, 'its columns must be named'];
+            }
+            $named[$column] = $value;
+        }
+
+        if (!is_null($columns) && (count($named) !== count($columns) || array_diff_key($named, array_flip($columns)))) {
+            return [null, sprintf('it has the columns [%s], but the first row has [%s]', implode(', ', array_keys($named)), implode(', ', $columns))];
+        }
+
+        return [$named, null];
+    }
+
+    /**
+     * @param array<string, mixed> $options
+     * @param list<string> $known
+     */
+    private function assertKnownOptions(string $method, array $options, array $known): void
+    {
+        if ($unknown = array_diff(array_keys($options), $known)) {
+            throw new InvalidArgumentException(sprintf(
+                '%s() has no option "%s". The options are: %s.',
+                $method,
+                implode('", "', $unknown),
+                implode(', ', $known)
+            ));
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $options
+     */
+    private function stringOption(array $options, string $name): ?string
+    {
+        $value = $options[$name] ?? null;
+
+        if (!is_null($value) && (!is_string($value) || $value === '')) {
+            throw new InvalidArgumentException("The \"{$name}\" option must be a non-empty string.");
+        }
+
+        return $value;
+    }
+
+    /**
+     * @param array<string, mixed> $options
+     */
+    private function callableOption(array $options, string $name): ?callable
+    {
+        $value = $options[$name] ?? null;
+
+        if (!is_null($value) && !is_callable($value)) {
+            throw new InvalidArgumentException("The \"{$name}\" option must be callable.");
+        }
+
+        return $value;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function columnList(mixed $columns): array
+    {
+        if (!is_array($columns) || !$columns) {
+            throw new InvalidArgumentException('The "columns" option must be a non-empty list of column names.');
+        }
+
+        $list = [];
+        foreach ($columns as $column) {
+            if (!is_string($column) || $column === '') {
+                throw new InvalidArgumentException('The "columns" option must be a non-empty list of column names.');
+            }
+            $list[] = $column;
+        }
+
+        return $list;
     }
 
     /**
