@@ -1,12 +1,29 @@
 # Laravel BATCH (BULK)
 
-Insert and update many rows in Laravel with a single query.
+Bulk database operations for Laravel: update, insert, upsert, delete, sync, import and export
+many rows in a few queries, on MySQL, MariaDB, PostgreSQL and SQLite.
 
 [![Tests](https://github.com/mavinoo/laravelBatch/actions/workflows/tests.yml/badge.svg)](https://github.com/mavinoo/laravelBatch/actions/workflows/tests.yml)
 [![License](https://poser.pugx.org/mavinoo/laravel-batch/license)](https://packagist.org/packages/mavinoo/laravel-batch)
 [![Latest Stable Version](https://poser.pugx.org/mavinoo/laravel-batch/v/stable)](https://packagist.org/packages/mavinoo/laravel-batch)
 [![Total Downloads](https://poser.pugx.org/mavinoo/laravel-batch/downloads)](https://packagist.org/packages/mavinoo/laravel-batch)
 [![Daily Downloads](https://poser.pugx.org/mavinoo/laravel-batch/d/daily)](https://packagist.org/packages/mavinoo/laravel-batch)
+
+## What it does
+
+- [Update](#update) many rows with different values in one query, with increments, raw SQL and
+  [JSON paths](#json-columns).
+- [Insert](#insert) many rows, [get their ids](#insert-and-get-the-new-ids), or
+  [skip duplicates and see which](#insert-and-report-the-skipped-rows).
+- [Upsert](#upsert) with [counters](#counters), [conditions](#update-only-when-the-new-row-wins)
+  and [the stored rows returned](#get-the-rows-back).
+- [Delete](#delete) rows matched on several key columns.
+- [Sync](#sync-a-table-with-a-list) part of a table with a list: insert, update and delete in one go.
+- [Import](#import-from-a-file-or-any-iterable) CSV, TSV and JSON Lines files or any iterable with
+  constant memory, [row validation](#validate-rows) and the database's [own bulk loader](#fast-imports).
+- [Export](#export) a query to files, and [split large files](#split-a-large-file).
+- [Delete, update or archive millions of rows](#large-deletes-updates-and-archives) a chunk at a time.
+- [Preview the SQL](#preview-the-sql-without-running-it) of any call without running it.
 
 # Requirements
 
@@ -207,6 +224,128 @@ $ids = Batch::insertGetIds(new User, [
 - It's a separate method, so `insert()` and `insertRows()` don't pay for fetching ids.
 - Inside `pretend()` nothing runs, so it returns `[]`.
 
+## Insert and report the skipped rows
+
+`insertOrIgnoreRows()` inserts rows, skips the ones that hit a unique key, like `insertOrIgnore()`,
+and tells you exactly which ones were skipped:
+
+```php
+$result = Batch::insertOrIgnoreRows(new User, $rows, ['email']);
+// ['inserted' => 98, 'skipped' => [['email' => 'dup@example.com', 'name' => 'Ali'], ...]]
+```
+
+- The second argument names the columns that identify a row; the skipped rows are returned as given.
+- A key given twice in the list is inserted once and reported as skipped the second time.
+- PostgreSQL and SQLite report with `RETURNING`. MySQL and MariaDB need an auto-incrementing primary
+  key that the rows don't set.
+- It is exact also while other connections insert the same keys. Like any `INSERT`, inserting the
+  same keys from several connections at once can deadlock: retry the call when it does.
+
+# Upsert
+
+Insert rows, or update them when a row with the same `$uniqueBy` values already exists, in one query:
+
+```php
+Batch::upsert(new User, [
+    ['email' => 'ali@example.com', 'name' => 'Ali', 'score' => 90],   // exists: name and score are updated
+    ['email' => 'sara@example.com', 'name' => 'Sara', 'score' => 75], // new: inserted
+], ['email'], ['name', 'score']);
+```
+
+- The third argument lists the columns that identify an existing row. They need a primary or
+  unique index. On MySQL and MariaDB, any unique index decides what counts as an existing row.
+- The fourth argument lists the columns to update on existing rows; leave it out (`null`) to update
+  every given column.
+- `created_at` is only set on new rows and `updated_at` on every row, like Eloquent's `upsert()`.
+- Unlike `Model::upsert()`, large batches are split into several queries automatically, in one
+  transaction.
+- The returned count comes from the database: MySQL and MariaDB count an updated row as 2.
+
+## Counters
+
+Combine the stored value with the new one instead of replacing it, for stock levels, totals or
+high scores:
+
+```php
+Batch::upsert(new Stock, [
+    ['sku' => 'A1', 'qty' => 5],   // exists: qty = qty + 5
+    ['sku' => 'B2', 'qty' => 10],  // new: inserted with qty 10
+], ['sku'], ['qty' => ['+']]);
+```
+
+`['+']` adds, `['-']` subtracts, `['max']` keeps the larger value and `['min']` the smaller one. A
+stored `NULL` counts as 0 for `+` and `-`, and is replaced for `max` and `min`. Counter and plain
+columns can be mixed: `['name', 'qty' => ['+']]`.
+
+## Update only when the new row wins
+
+`onlyIf` updates an existing row only when the new value compares that way with the stored one,
+or the stored one is `NULL`. New rows are always inserted:
+
+```php
+// Rows from an external API: keep whichever version was changed last.
+Batch::upsert(new Product, $rows, ['sku'], null, ['onlyIf' => ['updated_at' => '>']]);
+```
+
+The operators are `>`, `>=`, `<`, `<=` and `<>`. Several columns must all match. On MySQL and
+MariaDB at most one `onlyIf` column can also be updated.
+
+## Get the rows back
+
+`upsertReturning()` takes the same arguments as `upsert()`, plus the columns to return, and gives
+back every row of the batch as it is stored afterwards, in the order of the input:
+
+```php
+$users = Batch::upsertReturning(new User, $rows, ['email'], ['name'], ['id', 'email']);
+// [['id' => 7, 'email' => 'ali@example.com'], ['id' => 102, 'email' => 'sara@example.com']]
+```
+
+The rows are read back by their `uniqueBy` values in the same transaction, so this works the same
+on every database, MySQL included. Rows an `onlyIf` condition left alone are returned as stored.
+
+# Delete
+
+Delete rows matched on one or more key columns:
+
+```php
+Batch::deleteByKeys(new Score, [
+    ['org_id' => 1, 'year' => 2025],
+    ['org_id' => 2, 'year' => 2026],
+], ['org_id', 'year']);
+```
+
+Models that use `SoftDeletes` are soft deleted (only `deleted_at`, and `updated_at`, are set).
+Pass `true` as the fourth argument to delete them for real.
+
+# Sync a table with a list
+
+`sync()` makes the rows a query matches look like a list, in one transaction: rows that are new
+are inserted, rows that exist are updated, and rows the list doesn't have are deleted.
+
+```php
+$result = Batch::sync(Product::where('supplier_id', 5), $feedRows, ['sku']);
+// ['inserted' => 120, 'updated' => 4800, 'deleted' => 35]
+
+// The same, on the query:
+Product::where('supplier_id', 5)->syncRows($feedRows, ['sku']);
+```
+
+- Only rows in the scope query can be deleted, so the scope is always explicit: pass
+  `Product::query()` to sync a whole table. The rows of the list should belong to the scope (here,
+  have `supplier_id` 5).
+- The third argument lists the columns that identify a row; they need a primary or unique index.
+  The fourth lists the columns to update on existing rows (default: every given column).
+- An empty list would delete every row in the scope, so it throws unless `allowEmpty: true`.
+- The keys are compared by the database itself, through a temporary table, so its collation
+  decides which keys are equal. On MySQL, `"ABC"` and `"abc"` are the same key by default, and
+  `sync()` won't delete a row it just updated.
+- When a key appears twice in the list, the later row wins.
+- The list can be any iterable, such as a generator or a `LazyCollection`, and is written a chunk at
+  a time: syncing 100,000 rows into a 100,000-row table took 1.4 to 4.8 seconds and 15 MB of memory.
+- Models that use `SoftDeletes` are soft deleted unless `force: true`, and soft-deleted rows that are
+  in the list are restored. Model events are not fired.
+- The database user needs permission to create temporary tables.
+
 # Import from a file or any iterable
 
 `import()` reads rows one at a time and writes them a chunk at a time, so files of any size are
@@ -335,49 +474,6 @@ User::where('active', true)->exportTo(storage_path('users.jsonl'));   // on the 
 Rows are read in primary key order (`DB::table()` queries use `id`), so the query can't have a limit
 or offset. CSV files are written the RFC 4180 way and can be imported again with `import()`.
 
-# Delete
-
-Delete rows matched on one or more key columns:
-
-```php
-Batch::deleteByKeys(new Score, [
-    ['org_id' => 1, 'year' => 2025],
-    ['org_id' => 2, 'year' => 2026],
-], ['org_id', 'year']);
-```
-
-Models that use `SoftDeletes` are soft deleted (only `deleted_at`, and `updated_at`, are set).
-Pass `true` as the fourth argument to delete them for real.
-
-# Sync a table with a list
-
-`sync()` makes the rows a query matches look like a list, in one transaction: rows that are new
-are inserted, rows that exist are updated, and rows the list doesn't have are deleted.
-
-```php
-$result = Batch::sync(Product::where('supplier_id', 5), $feedRows, ['sku']);
-// ['inserted' => 120, 'updated' => 4800, 'deleted' => 35]
-
-// The same, on the query:
-Product::where('supplier_id', 5)->syncRows($feedRows, ['sku']);
-```
-
-- Only rows in the scope query can be deleted, so the scope is always explicit: pass
-  `Product::query()` to sync a whole table. The rows of the list should belong to the scope (here,
-  have `supplier_id` 5).
-- The third argument lists the columns that identify a row; they need a primary or unique index.
-  The fourth lists the columns to update on existing rows (default: every given column).
-- An empty list would delete every row in the scope, so it throws unless `allowEmpty: true`.
-- The keys are compared by the database itself, through a temporary table, so its collation
-  decides which keys are equal. On MySQL, `"ABC"` and `"abc"` are the same key by default, and
-  `sync()` won't delete a row it just updated.
-- When a key appears twice in the list, the later row wins.
-- The list can be any iterable, such as a generator or a `LazyCollection`, and is written a chunk at
-  a time: syncing 100,000 rows into a 100,000-row table took 1.4 to 4.8 seconds and 15 MB of memory.
-- Models that use `SoftDeletes` are soft deleted unless `force: true`, and soft-deleted rows that are
-  in the list are restored. Model events are not fired.
-- The database user needs permission to create temporary tables.
-
 # Large deletes, updates and archives
 
 Deleting or updating millions of rows in one statement locks the table for a long time and fills
@@ -403,7 +499,6 @@ Log::where('created_at', '<', now()->subYear())->deleteInChunks(10000);
 User::where('active', false)->updateInChunks(['status' => 'archived']);
 Order::where('created_at', '<', '2020-01-01')->archiveTo('orders_archive');
 DB::table('logs')->where('level', 'debug')->deleteInChunks();
-User::where('active', true)->exportTo(storage_path('users.csv'));
 ```
 
 - All three return the number of rows they changed. `sleepMs` pauses between chunks, to go easy on
@@ -423,85 +518,6 @@ User::where('active', true)->exportTo(storage_path('users.csv'));
   target table needs the primary key column, as a primary or unique key.
 - Queries can't have a limit or offset. `DB::table()` queries are walked on the `id` column.
 - Inside `pretend()` nothing runs: the `SELECT` that picks the first chunk is recorded.
-
-# Upsert
-
-Insert rows, or update them when a row with the same `$uniqueBy` values already exists, in one query:
-
-```php
-Batch::upsert(new User, [
-    ['email' => 'ali@example.com', 'name' => 'Ali', 'score' => 90],   // exists: name and score are updated
-    ['email' => 'sara@example.com', 'name' => 'Sara', 'score' => 75], // new: inserted
-], ['email'], ['name', 'score']);
-```
-
-- The third argument lists the columns that identify an existing row. They need a primary or
-  unique index. On MySQL and MariaDB, any unique index decides what counts as an existing row.
-- The fourth argument lists the columns to update on existing rows; leave it out (`null`) to update
-  every given column.
-- `created_at` is only set on new rows and `updated_at` on every row, like Eloquent's `upsert()`.
-- Unlike `Model::upsert()`, large batches are split into several queries automatically, in one
-  transaction.
-- The returned count comes from the database: MySQL and MariaDB count an updated row as 2.
-
-## Counters
-
-Combine the stored value with the new one instead of replacing it, for stock levels, totals or
-high scores:
-
-```php
-Batch::upsert(new Stock, [
-    ['sku' => 'A1', 'qty' => 5],   // exists: qty = qty + 5
-    ['sku' => 'B2', 'qty' => 10],  // new: inserted with qty 10
-], ['sku'], ['qty' => ['+']]);
-```
-
-`['+']` adds, `['-']` subtracts, `['max']` keeps the larger value and `['min']` the smaller one. A
-stored `NULL` counts as 0 for `+` and `-`, and is replaced for `max` and `min`. Counter and plain
-columns can be mixed: `['name', 'qty' => ['+']]`.
-
-## Update only when the new row wins
-
-`onlyIf` updates an existing row only when the new value compares that way with the stored one,
-or the stored one is `NULL`. New rows are always inserted:
-
-```php
-// Rows from an external API: keep whichever version was changed last.
-Batch::upsert(new Product, $rows, ['sku'], null, ['onlyIf' => ['updated_at' => '>']]);
-```
-
-The operators are `>`, `>=`, `<`, `<=` and `<>`. Several columns must all match. On MySQL and
-MariaDB at most one `onlyIf` column can also be updated.
-
-## Get the rows back
-
-`upsertReturning()` takes the same arguments as `upsert()`, plus the columns to return, and gives
-back every row of the batch as it is stored afterwards, in the order of the input:
-
-```php
-$users = Batch::upsertReturning(new User, $rows, ['email'], ['name'], ['id', 'email']);
-// [['id' => 7, 'email' => 'ali@example.com'], ['id' => 102, 'email' => 'sara@example.com']]
-```
-
-The rows are read back by their `uniqueBy` values in the same transaction, so this works the same
-on every database, MySQL included. Rows an `onlyIf` condition left alone are returned as stored.
-
-# Insert and report the skipped rows
-
-`insertOrIgnoreRows()` inserts rows, skips the ones that hit a unique key, like `insertOrIgnore()`,
-and tells you exactly which ones were skipped:
-
-```php
-$result = Batch::insertOrIgnoreRows(new User, $rows, ['email']);
-// ['inserted' => 98, 'skipped' => [['email' => 'dup@example.com', 'name' => 'Ali'], ...]]
-```
-
-- The second argument names the columns that identify a row; the skipped rows are returned as given.
-- A key given twice in the list is inserted once and reported as skipped the second time.
-- PostgreSQL and SQLite report with `RETURNING`. MySQL and MariaDB need an auto-incrementing primary
-  key that the rows don't set.
-- It is exact also while other connections insert the same keys. Like any `INSERT`, inserting the
-  same keys from several connections at once can deadlock: retry the call when it does.
 
 # Turn timestamps off
 
@@ -562,6 +578,7 @@ User::where('active', false)->deleteInChunks(1000);
 User::where('active', false)->updateInChunks(['status' => 'archived']);
 User::where('created_at', '<', '2020-01-01')->archiveTo('users_archive');
 User::where('org_id', 5)->syncRows($rows, ['email']);
+User::where('active', true)->exportTo(storage_path('users.csv'));
 ```
 
 `(new User)->updateMultipleCondition()` still works, but is deprecated in favour of the static
@@ -603,6 +620,9 @@ create an empty `batch_test` database and set `DB_CONNECTION` (plus `DB_HOST`, `
 DB_CONNECTION=mysql DB_USERNAME=root composer test
 DB_CONNECTION=pgsql DB_USERNAME=postgres composer test
 ```
+
+On MySQL the fast-import tests turn `local_infile` on with `SET GLOBAL`, so the MySQL user needs
+that privilege (`root` has it).
 
 # Donate
 
